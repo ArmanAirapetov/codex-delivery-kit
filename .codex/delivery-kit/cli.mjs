@@ -59,6 +59,7 @@ const SCHEMA_ROOT = path.join(KIT_ROOT, 'delivery', 'schemas');
 const CLI_PATH = fileURLToPath(import.meta.url);
 const BOOLEAN_OPTIONS = new Set([
   'allowDirty',
+  'all',
   'background',
   'follow',
   'help',
@@ -72,6 +73,7 @@ const BOOLEAN_OPTIONS = new Set([
 ]);
 const BACKGROUND_TERMINAL_STATUSES = new Set(['exited', 'failed', 'stopped']);
 const DELIVERY_TERMINAL_PHASES = new Set(['accepted', 'blocked', 'failed']);
+const DEFAULT_FOLLOW_TAIL = 80;
 const DEFAULT_CONFIG = {
   codexBinary: 'codex',
   maxParallel: 4,
@@ -1408,6 +1410,7 @@ async function statusCommand(options) {
   const background = await readBackgroundRecord(repo, runId);
   if (background) {
     const stale = backgroundIsStale(background);
+    const stopped = ['stopped', 'stop_requested'].includes(background.status);
     output += [
       '## Background',
       '',
@@ -1421,6 +1424,7 @@ async function statusCommand(options) {
       `- **Finished:** ${background.finishedAt ?? '—'}`,
       `- **Log:** ${background.backgroundLogPath ? path.relative(repo, background.backgroundLogPath) : '—'}`,
       stale ? '- **Notice:** background process is not alive; use `resume --run <id>` to archive running workstreams and retry.' : '',
+      !stale && stopped ? '- **Notice:** background process was stopped or stop was requested; use `resume --run <id>` to archive running workstreams and retry.' : '',
       '',
     ].filter((line) => line !== '').join('\n');
   }
@@ -1457,11 +1461,48 @@ async function readEventsChunk(file, offset) {
   }
 }
 
+async function readEventsSnapshot(file) {
+  const info = await stat(file).catch((error) => {
+    if (error?.code === 'ENOENT') return null;
+    throw error;
+  });
+  if (!info) return { offset: 0, text: '' };
+  const text = info.size ? await readFile(file, 'utf8') : '';
+  return { offset: info.size, text };
+}
+
+function parseTailOption(options) {
+  if (options.all) return null;
+  if (options.tail === undefined) return options.follow ? DEFAULT_FOLLOW_TAIL : null;
+  const value = Number(options.tail);
+  if (!Number.isInteger(value) || value < 0) throw new UserFacingError('--tail must be a non-negative integer.');
+  return value;
+}
+
+function renderEventLines(text, { verbose, repo, tail = null } = {}) {
+  let lines = text.split(/\r?\n/).filter((line) => line.trim());
+  if (tail !== null) lines = tail === 0 ? [] : lines.slice(-tail);
+  let terminalSeen = false;
+  for (const line of lines) {
+    try {
+      const event = JSON.parse(line);
+      terminalSeen ||= isTerminalProgressEvent(event);
+      const rendered = renderProgressLine(event, { verbose, repo });
+      if (rendered) process.stdout.write(`${rendered}\n`);
+    } catch {
+      // Ignore corrupt event records; raw artifacts remain available for manual inspection.
+    }
+  }
+  return terminalSeen;
+}
+
 async function logsCommand(options) {
   const repo = await repositoryRootFor(await repoCwdFromOptions(options));
   const runId = options.run || await latestRunId(repo);
   if (!runId) throw new Error('No delivery runs found.');
   const eventsPath = runPaths(repo, runId).events;
+  const verbose = Boolean(options.verbose);
+  const tail = parseTailOption(options);
   let offset = 0;
   let pending = '';
   const printNew = async () => {
@@ -1476,7 +1517,7 @@ async function logsCommand(options) {
       try {
         const event = JSON.parse(line);
         terminalSeen ||= isTerminalProgressEvent(event);
-        const rendered = renderProgressLine(event, { verbose: Boolean(options.verbose), repo });
+        const rendered = renderProgressLine(event, { verbose, repo });
         if (rendered) {
           process.stdout.write(`${rendered}\n`);
         }
@@ -1486,7 +1527,13 @@ async function logsCommand(options) {
     }
     return terminalSeen;
   };
-  await printNew();
+  if (tail === null) {
+    await printNew();
+  } else {
+    const snapshot = await readEventsSnapshot(eventsPath);
+    offset = snapshot.offset;
+    renderEventLines(snapshot.text, { verbose, repo, tail });
+  }
   if (!options.follow) return;
   while (true) {
     await delay(1000);
@@ -1542,6 +1589,9 @@ async function stopCommand(options) {
     signal: signalSent ? 'SIGTERM' : null,
   });
   state.background = { ...finalRecord, backgroundLogPath: finalRecord.backgroundLogPath ? path.relative(repo, finalRecord.backgroundLogPath) : null };
+  await appendEvent(repo, state, exited
+    ? { type: 'background.stopped', pid: background.pid, mode: background.mode, signal: signalSent ? 'SIGTERM' : null, signalError }
+    : { type: 'background.stop.pending', pid: background.pid, mode: background.mode, signal: signalSent ? 'SIGTERM' : null, signalError });
   await saveState(repo, state);
   process.stdout.write(`${JSON.stringify({
     runId,
@@ -1575,7 +1625,7 @@ Usage:
   node .codex/delivery-kit/cli.mjs run --repo <path> "<objective>" [options]
   node .codex/delivery-kit/cli.mjs run <path> "<objective>" [options]
   node .codex/delivery-kit/cli.mjs resume [--repo <path>] [--run <id>] [options]
-  node .codex/delivery-kit/cli.mjs logs [--repo <path>] [--run <id>] [--follow] [--verbose]
+  node .codex/delivery-kit/cli.mjs logs [--repo <path>] [--run <id>] [--follow] [--tail <n>] [--all] [--verbose]
   node .codex/delivery-kit/cli.mjs status [--repo <path>] [--run <id>]
   node .codex/delivery-kit/cli.mjs report [--repo <path>] [--run <id>]
   node .codex/delivery-kit/cli.mjs stop [--repo <path>] [--run <id>]
@@ -1589,6 +1639,8 @@ Run/resume options:
   --timeout-minutes <n> Per Codex turn and validation command timeout
   --model <name>        Override the default Codex model for all roles
   --background          Start run/resume in a detached background process
+  --tail <n>            Show only the last n event records before exiting or following
+  --all                 With logs --follow, print full history before following
   --quiet               Suppress live progress output
   --verbose             Print additional sanitized progress details
   --raw                 Retain raw Codex JSONL in addition to sanitized events

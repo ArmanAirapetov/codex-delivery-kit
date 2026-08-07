@@ -1,6 +1,12 @@
 import path from 'node:path';
 
-const TERMINAL_EVENT_TYPES = new Set(['workflow.accepted', 'workflow.blocked', 'workflow.failed']);
+const TERMINAL_EVENT_TYPES = new Set([
+  'workflow.accepted',
+  'workflow.blocked',
+  'workflow.failed',
+  'background.exited',
+  'background.stopped',
+]);
 
 function shortSha(value) {
   return value ? String(value).slice(0, 12) : 'n/a';
@@ -168,6 +174,18 @@ export function renderProgressLine(event, { verbose = false, repo = null } = {})
       return verbose ? `[background] heartbeat pid=${event.pid}` : null;
     case 'background.stop.requested':
       return `[background] stop requested pid=${event.pid}`;
+    case 'background.stop.pending':
+      return details([
+        `[background] stop pending pid=${event.pid}`,
+        event.signal ? `signal=${event.signal}` : '',
+        verbose && event.signalError ? `error=${event.signalError}` : '',
+      ]);
+    case 'background.stopped':
+      return details([
+        `[background] stopped pid=${event.pid}`,
+        event.signal ? `signal=${event.signal}` : '',
+        verbose && event.signalError ? `error=${event.signalError}` : '',
+      ]);
     case 'background.exited':
       return `[background] exited pid=${event.pid} exit=${event.exitCode ?? 'n/a'} signal=${event.signal ?? 'n/a'}`;
     case 'turn.completed':

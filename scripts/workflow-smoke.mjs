@@ -241,6 +241,11 @@ if (logs.stdout.trim()) {
   assert.match(logs.stdout, /\[final\] accepted/);
   assert.doesNotMatch(logs.stdout, /Update source marker/);
 }
+const tailedLogs = await runProcess('node', [cli, 'logs', '--repo', repo, '--run', latest, '--tail', '1'], { cwd: kitRoot, env, rejectOnError: true });
+if (tailedLogs.stdout.trim()) {
+  assert.doesNotMatch(tailedLogs.stdout, /\[run\].*started/);
+  assert.match(tailedLogs.stdout, /\[final\] accepted/);
+}
 const verboseLogs = await runProcess('node', [cli, 'logs', '--repo', repo, '--run', latest, '--verbose'], { cwd: kitRoot, env, rejectOnError: true });
 if (verboseLogs.stdout.trim()) assert.match(verboseLogs.stdout, /log=.*validation-01\.log/);
 assert.match(await renderedEvents(repo, latest, { verbose: true }), /log=.*validation-01\.log/);
@@ -408,5 +413,7 @@ const stoppedMeta = JSON.parse(await readFile(path.join(stopRepo, '.codex', 'del
 assert.match(stoppedMeta.status, /stopped|stop_requested/);
 const stopLogs = await runProcess('node', [cli, 'logs', '--repo', stopRepo, '--run', stopMeta.runId], { cwd: kitRoot, env, rejectOnError: true });
 if (stopLogs.stdout.trim()) assert.match(stopLogs.stdout, /\[background\] stop requested/);
+if (stoppedMeta.status === 'stopped' && stopLogs.stdout.trim()) assert.match(stopLogs.stdout, /\[background\] stopped/);
 assert.match(await renderedEvents(stopRepo, stopMeta.runId), /\[background\] stop requested/);
+if (stoppedMeta.status === 'stopped') assert.match(await renderedEvents(stopRepo, stopMeta.runId), /\[background\] stopped/);
 console.log('workflow-smoke: OK');

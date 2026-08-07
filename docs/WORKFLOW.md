@@ -63,11 +63,13 @@ Foreground запуск пишет concise sanitized progress в stderr и фи�
 
 ```bash
 ./scripts/codex-delivery logs --follow
+./scripts/codex-delivery logs --follow --tail 30
+./scripts/codex-delivery logs --follow --all
 ./scripts/codex-delivery status
 ./scripts/codex-delivery report
 ```
 
-`logs --follow` показывает тот же sanitized progress из `events.jsonl`, который foreground run пишет в stderr. `summary.md` обновляется после фаз, workstream и gate transitions. `status` дополнительно показывает background PID, heartbeat и log path, если run был запущен через `--background`.
+`logs --follow` показывает тот же sanitized progress из `events.jsonl`, который foreground run пишет в stderr. По умолчанию follow выводит последние 80 event records и затем новые события; `--tail <n>` меняет размер начальной истории, `--all` включает полный history dump перед follow. Plain `logs` без `--follow` по-прежнему выводит весь event history. `summary.md` обновляется после фаз, workstream и gate transitions. `status` дополнительно показывает background PID, heartbeat и log path, если run был запущен через `--background`.
 
 Текущий run ID:
 
@@ -148,7 +150,7 @@ Resume сохраняет прежний terminal result в `state.resumes` и `
 ./scripts/codex-delivery stop --run <run-id>
 ```
 
-`stop` отправляет SIGTERM process group, пишет `background.stop.requested` в `events.jsonl` и обновляет `background.json`. Сам run остаётся доступен для анализа или явного `resume`.
+`stop` отправляет SIGTERM process group, пишет `background.stop.requested`, затем `background.stopped` или `background.stop.pending` в `events.jsonl` и обновляет `background.json`. Сам run остаётся доступен для анализа или явного `resume`.
 
 ## 8. Interactive mode
 

@@ -160,11 +160,15 @@ Harness всегда задаёт:
 ./scripts/codex-delivery resume --repo /path/to/project --run <run-id>
 ./scripts/codex-delivery resume --repo /path/to/project --run <run-id> --background
 ./scripts/codex-delivery logs --repo /path/to/project --run <run-id> --follow
+./scripts/codex-delivery logs --repo /path/to/project --run <run-id> --follow --tail 30
+./scripts/codex-delivery logs --repo /path/to/project --run <run-id> --follow --all
 ./scripts/codex-delivery status --repo /path/to/project
 ./scripts/codex-delivery stop --repo /path/to/project --run <run-id>
 ```
 
 Path-only invocation (`run /path/to/project`) считается ошибкой без objective.
+
+`logs --follow` по умолчанию показывает последние 80 event records и затем новые события. Используйте `--tail <n>` для другого окна или `--all`, если нужен полный history перед live follow.
 
 `--background` не меняет delivery semantics: создаются те же `state.json`, `events.jsonl`, `results.jsonl`, agent artifacts, snapshots и integration worktree. Дополнительно появляются `background.json` и `background.log`. Несколько active runs в одном repository разрешены, но один и тот же run нельзя запустить/resume в background второй раз, пока предыдущий PID жив.
 

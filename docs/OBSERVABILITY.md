@@ -68,6 +68,8 @@ Hook events contain hashes and lengths rather than full prompts/messages/outputs
 - `background.started`;
 - `background.heartbeat`;
 - `background.stop.requested`;
+- `background.stop.pending`;
+- `background.stopped`;
 - `background.exited`.
 
 ## 3. Live CLI progress
@@ -78,9 +80,11 @@ Foreground `run` и `resume` рендерят concise sanitized progress в stde
 ./scripts/codex-delivery run "..." --verbose
 ./scripts/codex-delivery run "..." --quiet
 ./scripts/codex-delivery logs --follow --run <run-id>
+./scripts/codex-delivery logs --follow --tail 30 --run <run-id>
+./scripts/codex-delivery logs --follow --all --run <run-id>
 ```
 
-`logs` читает `events.jsonl` и применяет тот же renderer. Default output не содержит prompt text, agent messages или raw JSONL. `--verbose` добавляет sanitized paths, duration и token totals.
+`logs` читает `events.jsonl` и применяет тот же renderer. Plain `logs` выводит весь history; `logs --follow` по умолчанию начинает с последних 80 event records, чтобы длинные resume chains не скрывали current process. `--tail <n>` задаёт другое окно, `--all` возвращает полный history перед follow. Default output не содержит prompt text, agent messages или raw JSONL. `--verbose` добавляет sanitized paths, duration и token totals.
 
 ## 4. Sanitized Codex and hook records
 
