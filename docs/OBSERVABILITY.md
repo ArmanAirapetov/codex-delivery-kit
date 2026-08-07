@@ -84,7 +84,7 @@ Foreground `run` и `resume` рендерят concise sanitized progress в stde
 ./scripts/codex-delivery logs --follow --all --run <run-id>
 ```
 
-`logs` читает `events.jsonl` и применяет тот же renderer. Plain `logs` выводит весь history; `logs --follow` по умолчанию начинает с последних 80 event records, чтобы длинные resume chains не скрывали current process. `--tail <n>` задаёт другое окно, `--all` возвращает полный history перед follow. Default output не содержит prompt text, agent messages или raw JSONL. `--verbose` добавляет sanitized paths, duration и token totals.
+`logs` читает `events.jsonl` и применяет тот же renderer. Plain `logs` выводит весь history; `logs --follow` по умолчанию начинает с последних 80 event records, чтобы длинные resume chains не скрывали current process. `--tail <n>` задаёт другое окно, `--all` возвращает полный history перед follow. Normal output показывает high-level phases, sanitized command starts, agent message lengths and background heartbeats, so a long-running agent does not look silent. It still does not include prompt text, agent message text or raw JSONL. `--verbose` adds sanitized paths, command completions, duration and token totals.
 
 ## 4. Sanitized Codex and hook records
 

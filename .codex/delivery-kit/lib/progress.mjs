@@ -48,6 +48,16 @@ function details(parts) {
   return parts.filter(Boolean).join(' ');
 }
 
+function preview(value, max = 160) {
+  const text = String(value ?? '').replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+  return text.length > max ? `${text.slice(0, max)}...` : text;
+}
+
+function agentLabel(event) {
+  return event.label ?? event.role ?? event.workstreamId ?? 'agent';
+}
+
 export function isTerminalProgressEvent(event) {
   return TERMINAL_EVENT_TYPES.has(event?.type);
 }
@@ -95,6 +105,33 @@ export function renderProgressLine(event, { verbose = false, repo = null } = {})
       ]);
     case 'codex.result.invalid':
       return `[agent] ${event.label} invalid-result ${event.error ?? ''}`.trim();
+    case 'item.started':
+      if (event.item?.type === 'command_execution') {
+        return details([
+          `[agent] ${agentLabel(event)} command started`,
+          event.workstreamId ? `workstream=${event.workstreamId}` : '',
+          event.item.commandPreview ? `cmd=${preview(event.item.commandPreview)}` : '',
+        ]);
+      }
+      return verbose ? `[agent] ${agentLabel(event)} item started type=${event.item?.type ?? 'unknown'}` : null;
+    case 'item.completed':
+      if (event.item?.type === 'agent_message') {
+        return details([
+          `[agent] ${agentLabel(event)} message`,
+          event.workstreamId ? `workstream=${event.workstreamId}` : '',
+          event.item.messageLength ? `chars=${event.item.messageLength}` : '',
+        ]);
+      }
+      if (event.item?.type === 'command_execution') {
+        return verbose
+          ? details([
+            `[agent] ${agentLabel(event)} command ${event.item.status ?? 'completed'}`,
+            event.workstreamId ? `workstream=${event.workstreamId}` : '',
+            event.item.commandPreview ? `cmd=${preview(event.item.commandPreview)}` : '',
+          ])
+          : null;
+      }
+      return verbose ? `[agent] ${agentLabel(event)} item completed type=${event.item?.type ?? 'unknown'}` : null;
     case 'workstream.wave.started':
       return `[wave] started ids=${list(event.ids)} base=${shortSha(event.baseCommit)}`;
     case 'workstream.wave.completed':
@@ -171,7 +208,11 @@ export function renderProgressLine(event, { verbose = false, repo = null } = {})
     case 'background.started':
       return `[background] started pid=${event.pid} log=${event.backgroundLogPath ?? event.logPath ?? ''}`.trim();
     case 'background.heartbeat':
-      return verbose ? `[background] heartbeat pid=${event.pid}` : null;
+      return details([
+        `[background] heartbeat pid=${event.pid}`,
+        event.mode ? `mode=${event.mode}` : '',
+        event.phase ? `phase=${event.phase}` : '',
+      ]);
     case 'background.stop.requested':
       return `[background] stop requested pid=${event.pid}`;
     case 'background.stop.pending':

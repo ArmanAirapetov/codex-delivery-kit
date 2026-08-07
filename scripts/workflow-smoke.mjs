@@ -129,6 +129,24 @@ const activeWarnings = await activeDeliveryRuns(activeWarningRepo);
 assert.equal(activeWarnings.length, 1);
 assert.equal(activeWarnings[0].runId, activeWarningRun);
 assert.match(renderActiveDeliveryWarning(activeWarnings), /already|appears active|Codex delivery process/);
+assert.match(renderProgressLine({
+  type: 'background.heartbeat',
+  pid: process.pid,
+  mode: 'resume',
+  phase: 'implementation',
+}), /\[background\] heartbeat.*mode=resume.*phase=implementation/);
+assert.match(renderProgressLine({
+  type: 'item.started',
+  label: 'workstream-W1',
+  workstreamId: 'W1',
+  item: { type: 'command_execution', commandPreview: 'python -m pytest tests/contracts' },
+}), /\[agent\] workstream-W1 command started.*workstream=W1/);
+assert.match(renderProgressLine({
+  type: 'item.completed',
+  label: 'workstream-W1',
+  workstreamId: 'W1',
+  item: { type: 'agent_message', messageLength: 42 },
+}), /\[agent\] workstream-W1 message.*chars=42/);
 
 const staleWarningRun = 'stale-warning-run';
 await mkdir(path.join(activeWarningRepo, '.codex', 'delivery-runs', staleWarningRun), { recursive: true });
