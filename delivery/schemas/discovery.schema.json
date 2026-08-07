@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "status": { "type": "string", "enum": ["completed", "blocked"] },
+    "summary": { "type": "string" },
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "kind": { "type": "string", "enum": ["discovery", "decision", "assumption", "risk", "finding", "evidence"] },
+          "title": { "type": "string" },
+          "summary": { "type": "string" },
+          "details": { "type": "array", "items": { "type": "string" } },
+          "paths": { "type": "array", "items": { "type": "string" } },
+          "confidence": { "type": "string", "enum": ["low", "medium", "high"] },
+          "tags": { "type": "array", "items": { "type": "string" } }
+        },
+        "required": ["kind", "title", "summary", "details", "paths", "confidence", "tags"],
+        "additionalProperties": false
+      }
+    },
+    "blockingQuestions": { "type": "array", "items": { "type": "string" } }
+  },
+  "required": ["status", "summary", "results", "blockingQuestions"],
+  "additionalProperties": false
+}

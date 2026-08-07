@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "verdict": { "type": "string", "enum": ["approved", "changes_required", "inconclusive"] },
+    "summary": { "type": "string" },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "severity": { "type": "string", "enum": ["critical", "high", "medium", "low", "info"] },
+          "title": { "type": "string" },
+          "summary": { "type": "string" },
+          "paths": { "type": "array", "items": { "type": "string" } },
+          "criterionIds": { "type": "array", "items": { "type": "string" } },
+          "reproduction": { "type": "array", "items": { "type": "string" } },
+          "recommendation": { "type": "string" }
+        },
+        "required": ["severity", "title", "summary", "paths", "criterionIds", "reproduction", "recommendation"],
+        "additionalProperties": false
+      }
+    },
+    "positiveEvidence": { "type": "array", "items": { "type": "string" } }
+  },
+  "required": ["verdict", "summary", "findings", "positiveEvidence"],
+  "additionalProperties": false
+}

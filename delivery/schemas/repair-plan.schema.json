@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "summary": { "type": "string" },
+    "workstreams": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "pattern": "^R[1-9][0-9]*-[A-Za-z0-9._-]+$" },
+          "title": { "type": "string" },
+          "kind": { "type": "string", "enum": ["repair"] },
+          "role": { "type": "string", "enum": ["debugger", "test_engineer", "docs"] },
+          "scope": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+          "dependsOn": { "type": "array", "items": { "type": "string" } },
+          "criterionIds": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+          "required": { "type": "boolean" },
+          "instructions": { "type": "array", "items": { "type": "string" } },
+          "localValidationCommands": { "type": "array", "items": { "type": "string" } }
+        },
+        "required": ["id", "title", "kind", "role", "scope", "dependsOn", "criterionIds", "required", "instructions", "localValidationCommands"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["summary", "workstreams"],
+  "additionalProperties": false
+}

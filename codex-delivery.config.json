@@ -1,0 +1,82 @@
+{
+  "codexBinary": "codex",
+  "maxParallel": 4,
+  "maxRepairs": 2,
+  "timeoutMinutes": 60,
+  "retainRawEvents": false,
+  "keepWorkerWorktrees": false,
+  "allowDirty": false,
+  "model": null,
+  "models": {
+    "explorer": null,
+    "test_analyst": null,
+    "risk_analyst": null,
+    "architect": null,
+    "implementer": null,
+    "test_engineer": null,
+    "docs": null,
+    "integrator": null,
+    "debugger": null,
+    "verifier": null,
+    "reviewer": null,
+    "security": null
+  },
+  "reasoning": {
+    "discovery": "medium",
+    "planning": "high",
+    "implementation": "high",
+    "verification": "high",
+    "review": "high"
+  },
+  "discoveryTracks": [
+    {
+      "role": "explorer",
+      "focus": "Map the affected execution paths, modules, tests, configuration, and existing conventions."
+    },
+    {
+      "role": "test_analyst",
+      "focus": "Map current test coverage, validation commands, likely regressions, fixtures, and failure modes."
+    },
+    {
+      "role": "risk_analyst",
+      "focus": "Identify architecture, compatibility, migration, security, and operational risks relevant to the objective."
+    }
+  ],
+  "reviewTracks": [
+    {
+      "role": "reviewer",
+      "focus": "Correctness, behavior regressions, maintainability, compatibility, and missing tests."
+    },
+    {
+      "role": "security",
+      "focus": "Trust boundaries, authentication, authorization, secret handling, injection, unsafe defaults, and abuse paths."
+    }
+  ],
+  "allowedValidationPrefixes": [
+    "npm test",
+    "npm run ",
+    "npx ",
+    "pnpm ",
+    "yarn ",
+    "bun ",
+    "pytest",
+    "python -m pytest",
+    "python3 -m pytest",
+    "ruff ",
+    "mypy ",
+    "cargo test",
+    "cargo check",
+    "cargo clippy",
+    "go test",
+    "go vet",
+    "make",
+    "cmake --build",
+    "./gradlew ",
+    "gradle ",
+    "mvn ",
+    "dotnet test",
+    "node ",
+    "bash scripts/",
+    "./scripts/"
+  ]
+}

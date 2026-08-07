@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "status": { "type": "string", "enum": ["completed", "failed", "blocked"] },
+    "summary": { "type": "string" },
+    "results": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "properties": {
+          "kind": { "type": "string", "enum": ["decision", "assumption", "risk", "finding", "evidence", "outcome"] },
+          "title": { "type": "string" },
+          "summary": { "type": "string" },
+          "details": { "type": "array", "items": { "type": "string" } },
+          "paths": { "type": "array", "items": { "type": "string" } },
+          "criterionIds": { "type": "array", "items": { "type": "string" } },
+          "confidence": { "type": "string", "enum": ["low", "medium", "high"] },
+          "tags": { "type": "array", "items": { "type": "string" } }
+        },
+        "required": ["kind", "title", "summary", "details", "paths", "criterionIds", "confidence", "tags"],
+        "additionalProperties": false
+      }
+    },
+    "checks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "properties": {
+          "command": { "type": "string" },
+          "status": { "type": "string", "enum": ["passed", "failed", "not_run"] },
+          "summary": { "type": "string" }
+        },
+        "required": ["command", "status", "summary"],
+        "additionalProperties": false
+      }
+    },
+    "changedPathsClaimed": { "type": "array", "items": { "type": "string" } },
+    "residualRisks": { "type": "array", "items": { "type": "string" } },
+    "blockingReason": { "type": ["string", "null"] }
+  },
+  "required": ["status", "summary", "results", "checks", "changedPathsClaimed", "residualRisks", "blockingReason"],
+  "additionalProperties": false
+}
