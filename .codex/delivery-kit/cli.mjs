@@ -307,6 +307,14 @@ function backgroundSignalTarget(pid) {
   return -numeric;
 }
 
+function backgroundIsStale(record) {
+  return Boolean(record?.pid && !processAlive(record.pid) && !BACKGROUND_TERMINAL_STATUSES.has(record.status));
+}
+
+function renderBackgroundStaleLine(record) {
+  return `[background] stale pid=${record.pid} status=${record.status ?? 'unknown'}; process is not alive. Resume can archive running workstreams and retry.`;
+}
+
 async function readBackgroundRecord(repo, runId) {
   return readJsonIfExists(runPaths(repo, runId).background);
 }
@@ -428,6 +436,7 @@ export async function activeDeliveryRuns(repo, { excludeRunId = null } = {}) {
       continue;
     }
     const state = await readJsonIfExists(runPaths(repo, runId).state).catch(() => null);
+    if (backgroundIsStale(background)) continue;
     if (state && !DELIVERY_TERMINAL_PHASES.has(state.phase) && !state.finishedAt) {
       active.push({
         runId,
@@ -1398,10 +1407,12 @@ async function statusCommand(options) {
   let output = `${await readFile(runPaths(repo, runId).summary, 'utf8')}\n`;
   const background = await readBackgroundRecord(repo, runId);
   if (background) {
+    const stale = backgroundIsStale(background);
     output += [
       '## Background',
       '',
       `- **Status:** ${background.status ?? 'unknown'}`,
+      `- **Effective status:** ${stale ? 'stale' : background.status ?? 'unknown'}`,
       `- **PID:** ${background.pid ?? '—'}`,
       `- **Alive:** ${background.pid ? String(processAlive(background.pid)) : 'false'}`,
       `- **Mode:** ${background.mode ?? '—'}`,
@@ -1409,8 +1420,9 @@ async function statusCommand(options) {
       `- **Last heartbeat:** ${background.lastHeartbeatAt ?? '—'}`,
       `- **Finished:** ${background.finishedAt ?? '—'}`,
       `- **Log:** ${background.backgroundLogPath ? path.relative(repo, background.backgroundLogPath) : '—'}`,
+      stale ? '- **Notice:** background process is not alive; use `resume --run <id>` to archive running workstreams and retry.' : '',
       '',
-    ].join('\n');
+    ].filter((line) => line !== '').join('\n');
   }
   process.stdout.write(output);
   return state;
@@ -1452,14 +1464,13 @@ async function logsCommand(options) {
   const eventsPath = runPaths(repo, runId).events;
   let offset = 0;
   let pending = '';
-  let terminalSeen = false;
   const printNew = async () => {
     const chunk = await readEventsChunk(eventsPath, offset);
     offset = chunk.offset;
     if (!chunk.text) return false;
     const lines = `${pending}${chunk.text}`.split(/\r?\n/);
     pending = lines.pop() ?? '';
-    let printed = false;
+    let terminalSeen = false;
     for (const line of lines) {
       if (!line.trim()) continue;
       try {
@@ -1468,19 +1479,18 @@ async function logsCommand(options) {
         const rendered = renderProgressLine(event, { verbose: Boolean(options.verbose), repo });
         if (rendered) {
           process.stdout.write(`${rendered}\n`);
-          printed = true;
         }
       } catch {
         // Ignore partial or corrupt lines; durable files remain available for manual inspection.
       }
     }
-    return printed;
+    return terminalSeen;
   };
   await printNew();
   if (!options.follow) return;
   while (true) {
     await delay(1000);
-    await printNew();
+    const terminalSeen = await printNew();
     if (terminalSeen) break;
     const state = await loadState(repo, runId).catch(() => null);
     if (state && ['accepted', 'blocked', 'failed'].includes(state.phase)) {
@@ -1488,6 +1498,10 @@ async function logsCommand(options) {
       break;
     }
     const background = await readBackgroundRecord(repo, runId).catch(() => null);
+    if (backgroundIsStale(background)) {
+      process.stdout.write(`${renderBackgroundStaleLine(background)}\n`);
+      break;
+    }
     if (background && ['exited', 'failed', 'stopped'].includes(background.status) && !processAlive(background.pid)) {
       await printNew();
       break;

@@ -130,6 +130,46 @@ assert.equal(activeWarnings.length, 1);
 assert.equal(activeWarnings[0].runId, activeWarningRun);
 assert.match(renderActiveDeliveryWarning(activeWarnings), /already|appears active|Codex delivery process/);
 
+const staleWarningRun = 'stale-warning-run';
+await mkdir(path.join(activeWarningRepo, '.codex', 'delivery-runs', staleWarningRun), { recursive: true });
+await writeFile(path.join(activeWarningRepo, '.codex', 'delivery-runs', staleWarningRun, 'state.json'), JSON.stringify({
+  runId: staleWarningRun,
+  phase: 'implementation',
+  objective: 'stale warning smoke',
+  baseRef: 'main',
+  baseCommit: 'abc',
+  repairIteration: 0,
+  maxRepairs: 1,
+  acceptanceCriteria: [],
+  workstreams: [],
+  validation: { commands: [], runs: [] },
+  reviews: [],
+  final: null,
+  startedAt: new Date().toISOString(),
+  finishedAt: null,
+}, null, 2));
+await writeFile(path.join(activeWarningRepo, '.codex', 'delivery-runs', staleWarningRun, 'background.json'), JSON.stringify({
+  runId: staleWarningRun,
+  repo: activeWarningRepo,
+  mode: 'resume',
+  status: 'running',
+  pid: 999999999,
+  startedAt: new Date().toISOString(),
+  lastHeartbeatAt: new Date().toISOString(),
+}, null, 2));
+const activeWarningsWithStale = await activeDeliveryRuns(activeWarningRepo);
+assert.deepEqual(activeWarningsWithStale.map((item) => item.runId), [activeWarningRun]);
+await writeFile(path.join(activeWarningRepo, '.codex', 'delivery-runs', staleWarningRun, 'events.jsonl'), `${JSON.stringify({
+  at: new Date().toISOString(),
+  runId: staleWarningRun,
+  phase: 'blocked',
+  type: 'workflow.blocked',
+  summary: 'previous terminal event',
+})}\n`);
+await writeFile(path.join(activeWarningRepo, '.codex', 'delivery-runs', staleWarningRun, 'summary.md'), '# stale warning smoke\n');
+const staleFollow = await runProcess('node', [cli, 'logs', '--repo', activeWarningRepo, '--run', staleWarningRun, '--follow'], { cwd: kitRoot, env, timeoutMs: 10000, maxOutputBytes: 1024 * 1024 });
+if (staleFollow.stdout.trim()) assert.match(staleFollow.stdout, /\[background\] stale/);
+
 const missingObjective = await runProcess('node', [cli, 'run', repo], { cwd: kitRoot, env, timeoutMs: 60000, maxOutputBytes: 1024 * 1024 });
 assert.notEqual(missingObjective.code, 0, 'Path-only run should fail before starting a delivery run.');
 const missingObjectiveOutput = `${missingObjective.stdout}\n${missingObjective.stderr}`.trim();
