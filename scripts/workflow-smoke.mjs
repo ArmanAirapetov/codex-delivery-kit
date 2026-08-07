@@ -53,12 +53,12 @@ if 'Stop background smoke' in prompt:
 if schema=='discovery.schema.json':
     result={'status':'completed','summary':'Discovery complete','results':[{'kind':'discovery','title':'Repository mapped','summary':'Relevant files found','details':[],'paths':['src/a.txt','tests/a.test.txt'],'confidence':'high','tags':['smoke']}],'blockingQuestions':[]}
 elif schema=='plan.schema.json':
-    result={'summary':'Implement source and test in parallel','acceptanceCriteria':['Source behavior is implemented','Regression test artifact is added'],'nonGoals':[],'affectedAreas':['src/a.txt','tests/a.test.txt'],'validationCommands':['node scripts/check.mjs'],'parallelismRationale':'The source and test files do not overlap.','workstreams':[{'id':'W1','title':'Implement source','kind':'implementation','role':'implementer','scope':['src/a.txt'],'dependsOn':[],'criterionIds':['AC-1'],'required':True,'instructions':['Update source marker'],'localValidationCommands':['node scripts/check.mjs']},{'id':'W2','title':'Add test artifact','kind':'test','role':'test_engineer','scope':['tests/a.test.txt'],'dependsOn':[],'criterionIds':['AC-2'],'required':True,'instructions':['Update test marker'],'localValidationCommands':['node scripts/check.mjs']}],'risks':[],'assumptions':[]}
+    result={'summary':'Implement source and test in parallel','acceptanceCriteria':['Source behavior is implemented','Regression test artifact is added'],'nonGoals':[],'affectedAreas':['src/a.txt','tests/a.test.txt'],'validationCommands':['node scripts/check.mjs'],'parallelismRationale':'The source and test files do not overlap.','workstreams':[{'id':'W1','title':'Implement source','kind':'implementation','role':'implementer','scope':['src/a.txt'],'dependsOn':[],'criterionIds':['AC-1'],'required':True,'instructions':['Update source marker'],'localValidationCommands':['python -m pytest tests/contracts']},{'id':'W2','title':'Add test artifact','kind':'test','role':'test_engineer','scope':['tests/a.test.txt'],'dependsOn':[],'criterionIds':['AC-2'],'required':True,'instructions':['Update test marker'],'localValidationCommands':['node scripts/check.mjs']}],'risks':[],'assumptions':[]}
 elif schema=='worker.schema.json':
     is_resume_smoke='Resume smoke delivery' in prompt
     if '"id": "W1"' in prompt:
         p=cwd/'src'/'a.txt'; p.write_text('implemented\\n'); changed=['src/a.txt']; cid=['AC-1']; title='Source implemented'
-        result={'status':'completed','summary':title,'results':[{'kind':'outcome','title':title,'summary':title,'details':[],'paths':changed,'criterionIds':cid,'confidence':'high','tags':['smoke']}],'checks':[{'command':'node scripts/check.mjs','status':'passed','summary':'Fake worker check recorded'}],'changedPathsClaimed':changed,'residualRisks':[],'blockingReason':None}
+        result={'status':'completed','summary':title,'results':[{'kind':'outcome','title':title,'summary':title,'details':[],'paths':changed,'criterionIds':cid,'confidence':'high','tags':['smoke']}],'checks':[{'command':'node scripts/check.mjs','status':'passed','summary':'Fake worker fallback check recorded'},{'command':'python -m pytest tests/contracts','status':'failed','summary':'Failed before collection because pytest is not installed.'},{'command':'python -m pip install --user pytest','status':'failed','summary':'Could not install pytest because pip is not installed.'},{'command':'delivery_status --runId smoke','status':'failed','summary':'Workflow helper is unavailable in strict worker worktree.'}],'changedPathsClaimed':changed,'residualRisks':['Planned pytest command was unavailable in the smoke environment.'],'blockingReason':None}
     elif '"id": "W2"' in prompt:
         p=cwd/'tests'/'a.test.txt'; changed=['tests/a.test.txt']; cid=['AC-2']; title='Test added'
         marker=pathlib.Path(os.environ.get('CODEX_DELIVERY_ROOT', cwd))/'.codex'/'delivery-runs'/os.environ.get('CODEX_DELIVERY_RUN_ID', 'unknown')/'.fake-w2-failed'
@@ -222,6 +222,7 @@ const rendered = await renderedEvents(repo, latest);
 assert.match(rendered, /\[run\].*started/);
 assert.match(rendered, /\[agent\] discovery-1-explorer started/);
 assert.match(rendered, /\[workstream\] W1 started/);
+assert.match(rendered, /\[workstream\] W1 nonblocking failed checks=/);
 assert.match(rendered, /\[validation\] 1\/1 started/);
 assert.match(rendered, /\[final\] accepted/);
 const state = JSON.parse(await readFile(path.join(repo, '.codex', 'delivery-runs', latest, 'state.json'), 'utf8'));
@@ -230,6 +231,7 @@ assert.equal(final.status, 'accepted');
 assert.ok(final.integrationCommit);
 assert.equal(state.phase, 'accepted');
 assert.deepEqual(state.workstreams.map((item) => item.status), ['integrated', 'integrated']);
+assert.ok(state.workstreams.find((item) => item.id === 'W1').checks.some((check) => check.status === 'failed'));
 assert.equal(state.validation.runs[0].ok, true);
 assert.equal(state.verification.verdict, 'passed');
 assert.equal(state.reviews.length, 2);

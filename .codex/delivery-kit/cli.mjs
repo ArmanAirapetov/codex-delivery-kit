@@ -683,6 +683,53 @@ function criteriaFor(state, workstream) {
   return state.acceptanceCriteria.filter((criterion) => wanted.has(criterion.id));
 }
 
+function normalizedCommand(command) {
+  return String(command ?? '').trim().replace(/\s+/g, ' ');
+}
+
+function isDeliveryWorkflowCommand(command) {
+  return /^delivery_[a-z_]+(?:\s|$)/.test(normalizedCommand(command));
+}
+
+function isDependencySetupCommand(command) {
+  const normalized = normalizedCommand(command);
+  return [
+    /^python(?:3)? -m pip install(?:\s|$)/,
+    /^python(?:3)? -m ensurepip(?:\s|$)/,
+    /^pip(?:3)? install(?:\s|$)/,
+    /^npm install(?:\s|$)/,
+    /^pnpm install(?:\s|$)/,
+    /^yarn install(?:\s|$)/,
+    /^bun install(?:\s|$)/,
+  ].some((pattern) => pattern.test(normalized));
+}
+
+function localValidationCommandsFor(workstream) {
+  return new Set((workstream.localValidationCommands ?? []).map(normalizedCommand).filter(Boolean));
+}
+
+function isToolUnavailableFailure(check) {
+  const command = normalizedCommand(check?.command);
+  const summary = String(check?.summary ?? '');
+  if (/^python(?:3)? -m pytest(?:\s|$)/.test(command)) {
+    return /No module named pytest|pytest[^.]*not installed|pytest[^.]*unavailable|pytest[^.]*not found/i.test(summary);
+  }
+  return /command not found|executable not found|tool(?:ing)? unavailable|dependency unavailable/i.test(summary);
+}
+
+function isNonBlockingWorkerFailedCheck(workstream, check) {
+  if (check?.status !== 'failed') return false;
+  const command = normalizedCommand(check.command);
+  if (isDeliveryWorkflowCommand(command)) return true;
+  if (isDependencySetupCommand(command)) return true;
+  if (localValidationCommandsFor(workstream).has(command) && isToolUnavailableFailure(check)) return true;
+  return false;
+}
+
+function blockingWorkerFailedChecks(workstream, checks = []) {
+  return checks.filter((check) => check?.status === 'failed' && !isNonBlockingWorkerFailedCheck(workstream, check));
+}
+
 async function executeWorker(repo, state, config, workstream, baseCommit, repairContext = null) {
   const created = await createWorktree({ repo, runId: state.runId, id: workstream.id, baseCommit });
   workstream.attempts ??= [];
@@ -729,8 +776,17 @@ async function executeWorker(repo, state, config, workstream, baseCommit, repair
   const actualPaths = await changedPaths(created.worktreePath, 'HEAD');
   const forbidden = actualPaths.filter((candidate) => !scopeMatches(candidate, workstream.scope));
   const failedChecks = run.final?.checks?.filter((check) => check.status === 'failed') ?? [];
+  const blockingFailedChecks = blockingWorkerFailedChecks(workstream, run.final?.checks ?? []);
+  const nonBlockingFailedChecks = failedChecks.filter((check) => !blockingFailedChecks.includes(check));
+  if (nonBlockingFailedChecks.length) {
+    await appendEvent(repo, state, {
+      type: 'workstream.checks.nonblocking',
+      workstreamId: workstream.id,
+      commands: nonBlockingFailedChecks.map((item) => item.command),
+    });
+  }
   const hasEvidence = (run.final?.results?.length ?? 0) > 0 && (run.final?.checks?.length ?? 0) > 0;
-  const completed = run.ok && run.final.status === 'completed' && forbidden.length === 0 && failedChecks.length === 0 && hasEvidence;
+  const completed = run.ok && run.final.status === 'completed' && forbidden.length === 0 && blockingFailedChecks.length === 0 && hasEvidence;
   if (!completed) {
     workstream.status = 'failed';
     workstream.finishedAt = now();
@@ -738,8 +794,8 @@ async function executeWorker(repo, state, config, workstream, baseCommit, repair
     workstream.result = run.final;
     workstream.error = forbidden.length
       ? `Out-of-scope paths: ${forbidden.join(', ')}`
-      : failedChecks.length
-        ? `Failed local checks: ${failedChecks.map((item) => item.command).join(', ')}`
+      : blockingFailedChecks.length
+        ? `Failed local checks: ${blockingFailedChecks.map((item) => item.command).join(', ')}`
         : run.final?.blockingReason || `Codex worker failed or returned status '${run.final?.status ?? 'invalid'}'.`;
     Object.assign(attempt, {
       status: 'failed',

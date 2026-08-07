@@ -174,6 +174,8 @@ export function renderProgressLine(event, { verbose = false, repo = null } = {})
       ]);
     case 'workstream.failed':
       return `[workstream] ${event.workstreamId} failed ${event.error ?? ''}`.trim();
+    case 'workstream.checks.nonblocking':
+      return `[workstream] ${event.workstreamId} nonblocking failed checks=${list(event.commands, 3)}`;
     case 'workstream.snapshot.saved':
       return verbose ? `[snapshot] ${event.workstreamId} ${event.reason} ${event.path} archive=${event.archiveOk ? 'ok' : 'failed'}` : null;
     case 'workstream.resume.reset':

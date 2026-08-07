@@ -46,7 +46,8 @@ Hook events contain hashes and lengths rather than full prompts/messages/outputs
 ### Workstreams
 
 - `workstream.wave.started/completed/failed`;
-- `workstream.started/completed/failed`.
+- `workstream.started/completed/failed`;
+- `workstream.checks.nonblocking`.
 
 ### Integration
 
@@ -119,6 +120,8 @@ Foreground `run` и `resume` рендерят concise sanitized progress в stde
 Сам text не копируется в central event journal. Strict harness сохраняет полный prompt и request/response metadata отдельно в `agents/<step>/prompt.txt`, `request.json`, `response.json`; structured final output хранится в `agents/<step>/final.json`. Native interactive hooks применяют hash/length принцип: prompt/message/tool-response сохраняются только как SHA-256 и length; короткий очищенный preview допускается только для команды, необходимой для диагностики policy.
 
 Worker generations дополнительно архивируются в `artifacts/workstreams/<id>/snapshots/<stamp>/`. Snapshot содержит status, changed paths, diffs, `worker-final.json` и `source.tgz` без типичных dependency/build директорий (`node_modules`, `dist`, `web/node_modules`, `web/dist`).
+
+Strict worker checks can include non-blocking failed entries. The harness logs `workstream.checks.nonblocking` when a failed check is a strict-mode workflow helper, dependency provisioning attempt, or a declared local validation command that could not run because the tool itself is unavailable. These records remain in `state.json` and agent `final.json`; the final validation gate still decides whether the integrated repository is acceptable.
 
 Background runs дополнительно пишут:
 

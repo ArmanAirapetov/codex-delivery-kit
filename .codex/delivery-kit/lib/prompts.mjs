@@ -36,9 +36,10 @@ Rules:
 6. Add a dedicated test workstream when tests are substantial and isolated.
 7. Do not add a synthetic integration workstream: the external harness performs sequential integration automatically.
 8. Every required acceptance criterion must be covered by at least one required workstream.
-9. Validation commands must be safe, deterministic repository checks. Do not include deployment or destructive commands.
+9. Validation commands must be safe, deterministic repository checks. Do not include deployment, package installation, dependency provisioning, workflow helper commands, or destructive commands.
 10. Target no more than ${maxParallel} simultaneously ready workstreams.
-11. Workstream instructions must be local, concrete, and state exact outputs.
+11. localValidationCommands must be checks the worker can run in its isolated worktree without installing dependencies. If the full repository check depends on later scaffolding, put it in validationCommands and give the workstream a smaller direct check.
+12. Workstream instructions must be local, concrete, and state exact outputs.
 
 Return only the JSON object required by the output schema.`;
 }
@@ -64,6 +65,9 @@ Hard boundaries:
 - Make the smallest complete change that satisfies the assigned criteria.
 - Inspect existing conventions before editing.
 - Run all applicable localValidationCommands. Add focused tests when needed.
+- Do not run package/dependency installation commands as validation checks.
+- If a required validation tool is unavailable, record that command as status "not_run" with the exact reason, run the best safe fallback check, and list the gap in residualRisks. Use status "failed" only when a check actually ran and proves the product/workstream is wrong.
+- Strict harness mode records your returned JSON automatically. Do not call interactive workflow tools such as delivery_status, delivery_record_result, delivery_complete_workstream, or delivery_accept.
 - Do not commit; the harness validates scope and commits after your turn.
 - Before finishing, inspect git diff and ensure no out-of-scope path changed.
 

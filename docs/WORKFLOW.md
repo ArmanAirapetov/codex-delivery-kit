@@ -85,11 +85,12 @@ cat .codex/delivery-runs/latest
 4. Ready writers запускаются waves до `maxParallel`.
 5. Каждый writer работает в отдельном worktree.
 6. Out-of-scope diff отклоняется.
-7. Accepted commits интегрируются последовательно.
-8. Validation commands выполняются harness.
-9. Verifier доказывает каждый criterion.
-10. Reviewer и security запускаются параллельно.
-11. При failure создаётся bounded repair DAG.
+7. Failed worker checks блокируют workstream только когда они отражают реальный product/test failure. Strict-only delivery helper failures, dependency installation attempts and declared checks that cannot run because the tool is unavailable are logged as non-blocking worker evidence.
+8. Accepted commits интегрируются последовательно.
+9. Validation commands выполняются harness.
+10. Verifier доказывает каждый criterion.
+11. Reviewer и security запускаются параллельно.
+12. При failure создаётся bounded repair DAG.
 
 ## 6. Результат accepted run
 
