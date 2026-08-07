@@ -69,7 +69,7 @@ Foreground запуск пишет concise sanitized progress в stderr и фи�
 ./scripts/codex-delivery report
 ```
 
-`logs --follow` показывает тот же sanitized progress из `events.jsonl`, который foreground run пишет в stderr. По умолчанию follow выводит последние 80 event records и затем новые события; `--tail <n>` меняет размер начальной истории, `--all` включает полный history dump перед follow. Normal output включает фазы, sanitized command starts, длину agent messages и background heartbeats, поэтому долгий agent не выглядит зависшим. Plain `logs` без `--follow` по-прежнему выводит весь event history. `summary.md` обновляется после фаз, workstream и gate transitions. `status` дополнительно показывает background PID, heartbeat и log path, если run был запущен через `--background`.
+`logs --follow` показывает тот же sanitized progress из `events.jsonl`, который foreground run пишет в stderr. По умолчанию follow выводит последние 80 event records и затем новые события; `--tail <n>` меняет размер начальной истории, `--all` включает полный history dump перед follow. Normal output включает фазы, sanitized command starts, file-change counts, длину agent messages и background heartbeats, поэтому долгий agent не выглядит зависшим. Plain `logs` без `--follow` по-прежнему выводит весь event history. `summary.md` обновляется после фаз, workstream и gate transitions. `status` дополнительно показывает background PID, heartbeat и log path, если run был запущен через `--background`.
 
 Текущий run ID:
 

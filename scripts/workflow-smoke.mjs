@@ -147,6 +147,12 @@ assert.match(renderProgressLine({
   workstreamId: 'W1',
   item: { type: 'agent_message', messageLength: 42 },
 }), /\[agent\] workstream-W1 message.*chars=42/);
+assert.match(renderProgressLine({
+  type: 'item.completed',
+  label: 'workstream-W1',
+  workstreamId: 'W1',
+  item: { type: 'file_change', status: 'completed', paths: ['src/a.txt', 'tests/a.test.txt'] },
+}), /\[agent\] workstream-W1 file change completed.*paths=2/);
 
 const staleWarningRun = 'stale-warning-run';
 await mkdir(path.join(activeWarningRepo, '.codex', 'delivery-runs', staleWarningRun), { recursive: true });

@@ -153,7 +153,7 @@ Background режим сразу возвращает `runId`, `pid` и пути
 ./scripts/codex-delivery stop --run <run-id>
 ```
 
-`logs --follow` по умолчанию выводит последние 80 event records и затем live progress; `--tail <n>` задаёт другое окно, `--all` печатает всю историю перед follow. Normal output показывает sanitized command starts, agent message lengths и background heartbeats, поэтому долгий agent не выглядит зависшим. Plain `logs` без `--follow` остаётся forensic full-history view.
+`logs --follow` по умолчанию выводит последние 80 event records и затем live progress; `--tail <n>` задаёт другое окно, `--all` печатает всю историю перед follow. Normal output показывает sanitized command starts, file-change counts, agent message lengths и background heartbeats, поэтому долгий agent не выглядит зависшим. Plain `logs` без `--follow` остаётся forensic full-history view.
 
 Несколько background runs в одном repository разрешены; каждый run получает собственные worktrees и run artifacts. Для одного и того же run повторный background resume отклоняется, если прежний background process ещё жив.
 Если в repository уже есть active delivery process, новый `run`/`resume` печатает notice в stderr с `runId`, `pid` и командой `logs --follow`. Это предупреждение не блокирует отдельный новый run, но same-run duplicate background resume остаётся ошибкой.

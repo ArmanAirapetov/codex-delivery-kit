@@ -58,6 +58,10 @@ function agentLabel(event) {
   return event.label ?? event.role ?? event.workstreamId ?? 'agent';
 }
 
+function pathCount(event) {
+  return Array.isArray(event.item?.paths) ? event.item.paths.length : 0;
+}
+
 export function isTerminalProgressEvent(event) {
   return TERMINAL_EVENT_TYPES.has(event?.type);
 }
@@ -113,6 +117,13 @@ export function renderProgressLine(event, { verbose = false, repo = null } = {})
           event.item.commandPreview ? `cmd=${preview(event.item.commandPreview)}` : '',
         ]);
       }
+      if (event.item?.type === 'file_change') {
+        return details([
+          `[agent] ${agentLabel(event)} file change started`,
+          event.workstreamId ? `workstream=${event.workstreamId}` : '',
+          `paths=${pathCount(event)}`,
+        ]);
+      }
       return verbose ? `[agent] ${agentLabel(event)} item started type=${event.item?.type ?? 'unknown'}` : null;
     case 'item.completed':
       if (event.item?.type === 'agent_message') {
@@ -130,6 +141,13 @@ export function renderProgressLine(event, { verbose = false, repo = null } = {})
             event.item.commandPreview ? `cmd=${preview(event.item.commandPreview)}` : '',
           ])
           : null;
+      }
+      if (event.item?.type === 'file_change') {
+        return details([
+          `[agent] ${agentLabel(event)} file change ${event.item.status ?? 'completed'}`,
+          event.workstreamId ? `workstream=${event.workstreamId}` : '',
+          `paths=${pathCount(event)}`,
+        ]);
       }
       return verbose ? `[agent] ${agentLabel(event)} item completed type=${event.item?.type ?? 'unknown'}` : null;
     case 'workstream.wave.started':
