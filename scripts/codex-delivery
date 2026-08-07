@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
-ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+if [[ -f "$SCRIPT_ROOT/.codex/delivery-kit/cli.mjs" ]]; then
+  ROOT="$SCRIPT_ROOT"
+else
+  ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+fi
 exec node "$ROOT/.codex/delivery-kit/cli.mjs" "$@"

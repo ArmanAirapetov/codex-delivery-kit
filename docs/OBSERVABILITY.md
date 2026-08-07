@@ -45,23 +45,44 @@ Hook events contain hashes and lengths rather than full prompts/messages/outputs
 
 ### Workstreams
 
-- `workstream.wave.started/completed`;
+- `workstream.wave.started/completed/failed`;
 - `workstream.started/completed/failed`.
 
 ### Integration
 
 - `integration.created`;
+- `integration.started`;
 - `integration.conflict`;
 - `integration.completed`.
 
 ### Quality
 
-- `validation.completed/rejected`;
+- `validation.started/completed/rejected`;
+- `inspection.started/completed`;
 - `inspection.mutations.discarded`;
 - `quality.gate`;
 - `repair.plan.approved`.
 
-## 3. Sanitized Codex and hook records
+### Background execution
+
+- `background.started`;
+- `background.heartbeat`;
+- `background.stop.requested`;
+- `background.exited`.
+
+## 3. Live CLI progress
+
+Foreground `run` и `resume` рендерят concise sanitized progress в stderr из того же event stream. Финальный structured JSON остаётся в stdout.
+
+```bash
+./scripts/codex-delivery run "..." --verbose
+./scripts/codex-delivery run "..." --quiet
+./scripts/codex-delivery logs --follow --run <run-id>
+```
+
+`logs` читает `events.jsonl` и применяет тот же renderer. Default output не содержит prompt text, agent messages или raw JSONL. `--verbose` добавляет sanitized paths, duration и token totals.
+
+## 4. Sanitized Codex and hook records
 
 Для command item сохраняются:
 
@@ -91,9 +112,16 @@ Hook events contain hashes and lengths rather than full prompts/messages/outputs
 }
 ```
 
-Сам text не копируется в central event journal. Structured final output хранится отдельно в `agents/<step>/final.json`. Native interactive hooks применяют тот же принцип: prompt/message/tool-response сохраняются только как SHA-256 и length; короткий очищенный preview допускается только для команды, необходимой для диагностики policy.
+Сам text не копируется в central event journal. Strict harness сохраняет полный prompt и request/response metadata отдельно в `agents/<step>/prompt.txt`, `request.json`, `response.json`; structured final output хранится в `agents/<step>/final.json`. Native interactive hooks применяют hash/length принцип: prompt/message/tool-response сохраняются только как SHA-256 и length; короткий очищенный preview допускается только для команды, необходимой для диагностики policy.
 
-## 4. Usage
+Worker generations дополнительно архивируются в `artifacts/workstreams/<id>/snapshots/<stamp>/`. Snapshot содержит status, changed paths, diffs, `worker-final.json` и `source.tgz` без типичных dependency/build директорий (`node_modules`, `dist`, `web/node_modules`, `web/dist`).
+
+Background runs дополнительно пишут:
+
+- `background.json`: PID, mode, status, timestamps, heartbeat, exit/signal metadata;
+- `background.log`: stdout/stderr detached child process, включая foreground-style progress и final JSON/error text.
+
+## 5. Usage
 
 `turn.completed` usage агрегируется в `codex.run.completed`:
 
@@ -118,7 +146,7 @@ Analyzer группирует usage по role.
 
 Для экономики следует добавить собственный versioned price table и явно обозначать результат как estimate.
 
-## 5. results.jsonl
+## 6. results.jsonl
 
 Подробно описан в [RESULTS.md](RESULTS.md). Типовые kinds:
 
@@ -130,7 +158,7 @@ Analyzer группирует usage по role.
 - `evidence`;
 - `outcome`.
 
-## 6. Метрики
+## 7. Метрики
 
 `analyze-runs.mjs` рассчитывает:
 
@@ -167,7 +195,7 @@ Analyzer группирует usage по role.
 - input/cached/output/reasoning tokens;
 - usage по role.
 
-## 7. Практический анализ bottleneck
+## 8. Практический анализ bottleneck
 
 Примеры интерпретации:
 
@@ -179,12 +207,13 @@ Analyzer группирует usage по role.
 - частые out-of-scope failures: scope слишком узкий либо worker prompt плохо локализован;
 - validation passes, но verifier unknown: tests не доказывают product behavior.
 
-## 8. Retention
+## 9. Retention
 
 Рекомендуемый режим:
 
 - `state.json`, `results.jsonl`, `summary.md`, `final.json`: хранить вместе с engineering records;
 - sanitized `events.jsonl`: хранить для анализа runs;
+- `background.json` и `background.log`: хранить вместе с run artifacts, если использовался `--background`;
 - `.codex/hook-events/`: fallback telemetry sessions, не привязанных к delivery run; хранить короче либо периодически импортировать;
 - command logs: срок зависит от конфиденциальности проекта;
 - raw JSONL: удалять быстро или не включать;

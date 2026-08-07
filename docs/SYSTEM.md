@@ -129,7 +129,6 @@ codex exec \
   --ephemeral \
   --dangerously-bypass-hook-trust \
   --sandbox <read-only|workspace-write> \
-  --ask-for-approval never \
   --cd <worktree> \
   --output-schema <schema> \
   --output-last-message <file> \
@@ -333,6 +332,8 @@ AND no critical/high/medium finding
 - semantic knowledge — `results.jsonl`;
 - current readable status — `summary.md`;
 - terminal decision — `final.json`.
+- per-agent prompt/request/response/final files — `agents/<step>/`;
+- per-workstream source snapshots — `artifacts/workstreams/<id>/snapshots/`.
 
 Это позволяет продолжать анализ после завершения session, сравнивать runs и менять модели без потери методологии.
 
@@ -341,7 +342,6 @@ AND no critical/high/medium finding
 ### 9.1 Что система не сохраняет по умолчанию
 
 - raw hidden reasoning;
-- полные prompts;
 - полный agent message text;
 - полный stdout всех Codex items;
 - environment variables;
@@ -349,12 +349,15 @@ AND no critical/high/medium finding
 
 ### 9.2 Что сохраняется
 
+- полный strict-harness prompt в `agents/<step>/prompt.txt`;
+- request/response metadata в `agents/<step>/request.json` и `response.json`;
 - sanitized event metadata;
 - command preview и SHA-256;
 - changed paths;
 - duration/status;
 - usage counters;
 - structured final role output;
+- worker source snapshots before cleanup;
 - validation logs с best-effort redaction.
 
 `--raw` сохраняет исходный Codex JSONL и должен использоваться только в доверенном закрытом окружении.

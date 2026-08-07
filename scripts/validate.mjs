@@ -11,8 +11,14 @@ async function walk(directory) {
   const result = [];
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     const full = path.join(directory, entry.name);
-    if (entry.isDirectory()) result.push(...await walk(full));
-    else result.push(full);
+    const relative = path.relative(ROOT, full).split(path.sep).join('/');
+    if (entry.isDirectory()) {
+      if (['.git', '.codex-delivery-backups', 'node_modules', 'dist'].includes(entry.name)) continue;
+      if (relative === '.codex/delivery-runs' || relative.startsWith('.codex/delivery-runs/')) continue;
+      result.push(...await walk(full));
+    } else {
+      result.push(full);
+    }
   }
   return result;
 }
@@ -22,14 +28,33 @@ function run(command, args, cwd = ROOT) {
   if (result.status !== 0) throw new Error(`${command} ${args.join(' ')} failed\n${result.stdout}\n${result.stderr}`);
 }
 
+async function exists(relative) {
+  try {
+    await access(path.join(ROOT, relative));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function requireAny(label, candidates) {
+  for (const candidate of candidates) {
+    if (await exists(candidate)) return candidate;
+  }
+  throw new Error(`Missing required ${label}. Tried: ${candidates.join(', ')}`);
+}
+
 async function main() {
   const required = [
-    'README.md', 'AGENTS.md', '.codex/config.toml', 'codex-delivery.config.json',
+    'AGENTS.md', '.codex/config.toml', 'codex-delivery.config.json',
     '.codex/delivery-kit/cli.mjs', '.codex/delivery-kit/mcp-server.mjs',
     '.agents/skills/codex-delivery/SKILL.md', 'scripts/codex-delivery',
-    'docs/SYSTEM.md', 'docs/WORKFLOW.md', 'docs/OBSERVABILITY.md', 'docs/HOOKS.md', 'docs/RESULTS.md',
   ];
   for (const relative of required) await access(path.join(ROOT, relative));
+  const readmePath = await requireAny('README', ['README.md', 'docs/codex-delivery/README.md']);
+  for (const doc of ['SYSTEM.md', 'WORKFLOW.md', 'OBSERVABILITY.md', 'HOOKS.md', 'RESULTS.md']) {
+    await requireAny(doc, [`docs/${doc}`, `docs/codex-delivery/${doc}`]);
+  }
 
   const files = await walk(ROOT);
   const mjsFiles = files.filter((file) => file.endsWith('.mjs'));
@@ -63,7 +88,7 @@ async function main() {
 
   const wrapper = await stat(path.join(ROOT, 'scripts', 'codex-delivery'));
   assert(wrapper.isFile());
-  const readme = await readFile(path.join(ROOT, 'README.md'), 'utf8');
+  const readme = await readFile(path.join(ROOT, readmePath), 'utf8');
   for (const referenced of ['scripts/install.sh', 'scripts/validate.mjs', 'scripts/mcp-smoke.mjs', 'scripts/smoke-test.sh']) {
     assert(readme.includes(referenced.split('/').at(-1)) || readme.includes(referenced), `README does not describe ${referenced}`);
   }

@@ -128,6 +128,22 @@ if target_path.exists():
 else:
     target = {"description": "Project lifecycle hooks.", "hooks": {}}
 target.setdefault("hooks", {})
+
+def is_delivery_hook(hook):
+    command = hook.get("command")
+    return isinstance(command, str) and ".codex/delivery-kit/hook.mjs" in command
+
+for event, groups in list(target.get("hooks", {}).items()):
+    kept_groups = []
+    for group in groups:
+        hooks = group.get("hooks", [])
+        kept_hooks = [hook for hook in hooks if not is_delivery_hook(hook)]
+        if kept_hooks:
+            next_group = dict(group)
+            next_group["hooks"] = kept_hooks
+            kept_groups.append(next_group)
+    target["hooks"][event] = kept_groups
+
 for event, groups in source.get("hooks", {}).items():
     dest = target["hooks"].setdefault(event, [])
     existing = {json.dumps(group, sort_keys=True, separators=(",", ":")) for group in dest}

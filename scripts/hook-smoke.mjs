@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, open, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -17,14 +17,23 @@ async function git(cwd, args) {
 }
 
 async function invoke(cwd, input, env = {}) {
+  const prefix = `.hook-smoke-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const stdoutPath = path.join(cwd, `${prefix}.stdout`);
+  const stderrPath = path.join(cwd, `${prefix}.stderr`);
+  const stdoutFile = await open(stdoutPath, 'w+');
+  const stderrFile = await open(stderrPath, 'w+');
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [HOOK], { cwd, env: { ...process.env, ...env }, stdio: ['pipe', 'pipe', 'pipe'] });
-    let stdout = '';
-    let stderr = '';
-    child.stdout.on('data', (chunk) => { stdout += chunk; });
-    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    const child = spawn(process.execPath, [HOOK], { cwd, env: { ...process.env, ...env }, stdio: ['pipe', stdoutFile.fd, stderrFile.fd] });
     child.on('error', reject);
-    child.on('close', (code) => resolve({ code, stdout, stderr }));
+    child.on('close', async (code) => {
+      await stdoutFile.close();
+      await stderrFile.close();
+      const stdout = await readFile(stdoutPath, 'utf8').catch(() => '');
+      const stderr = await readFile(stderrPath, 'utf8').catch(() => '');
+      await rm(stdoutPath, { force: true });
+      await rm(stderrPath, { force: true });
+      resolve({ code, stdout, stderr });
+    });
     child.stdin.end(JSON.stringify(input));
   });
 }

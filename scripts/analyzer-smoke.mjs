@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { runProcess } from '../.codex/delivery-kit/lib/git.mjs';
+import { analyze } from '../.codex/delivery-kit/analyze-runs.mjs';
 
 const root = await mkdtemp(path.join(os.tmpdir(), 'codex-analyzer-'));
 const runId = 'run-smoke';
@@ -42,9 +42,12 @@ const results = [
   { kind: 'evidence', workstreamId: 'W2', criterionIds: ['AC-2'] },
 ];
 await writeFile(path.join(dir, 'results.jsonl'), results.map(JSON.stringify).join('\n') + '\n');
-const analyzer = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', '.codex', 'delivery-kit', 'analyze-runs.mjs');
-const result = await runProcess('node', [analyzer, '--root', root, '--run', runId, '--json'], { rejectOnError: true });
-const report = JSON.parse(result.stdout);
+const readJsonl = async (file) => (await readFile(file, 'utf8')).trim().split(/\r?\n/).filter(Boolean).map(JSON.parse);
+const report = analyze(
+  JSON.parse(await readFile(path.join(dir, 'state.json'), 'utf8')),
+  await readJsonl(path.join(dir, 'events.jsonl')),
+  await readJsonl(path.join(dir, 'results.jsonl')),
+);
 assert.equal(report.codex.runs, 2);
 assert.equal(report.codex.usage.input_tokens, 150);
 assert.equal(report.workstreams.maxConcurrentWorkstreams, 2);

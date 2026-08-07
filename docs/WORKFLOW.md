@@ -39,16 +39,25 @@ Acceptance criteria сформирует architect, но objective должен 
 
 Harness не требует API key, если Codex CLI уже авторизован обычным способом. В CI допускается отдельная официально поддерживаемая аутентификация Codex, но секрет не должен попадать в repository или run logs.
 
+Foreground запуск пишет concise sanitized progress в stderr и финальный JSON в stdout. Для detached запуска:
+
+```bash
+./scripts/codex-delivery run "<objective>" --background
+```
+
+Команда вернёт `runId`, `pid`, `statePath`, `eventsPath` и `backgroundLogPath`, а delivery продолжится в background process.
+
 ## 4. Наблюдение
 
 В другом terminal:
 
 ```bash
+./scripts/codex-delivery logs --follow
 ./scripts/codex-delivery status
 ./scripts/codex-delivery report
 ```
 
-`summary.md` обновляется после фаз, workstream и gate transitions.
+`logs --follow` показывает тот же sanitized progress из `events.jsonl`, который foreground run пишет в stderr. `summary.md` обновляется после фаз, workstream и gate transitions. `status` дополнительно показывает background PID, heartbeat и log path, если run был запущен через `--background`.
 
 Текущий run ID:
 
@@ -111,7 +120,25 @@ git cherry-pick <integration-commit>
 - findings в `results.jsonl`;
 - validation logs в `commands/`.
 
-После ручного решения можно запустить новый run с уточнённым objective. Resume текущего automated run пока намеренно не реализован: новый base commit и новый audit trail проще доказать, чем частично восстановленную process tree.
+Если причина исправима без изменения base branch, можно продолжить тот же run:
+
+```bash
+./scripts/codex-delivery resume --run <run-id>
+./scripts/codex-delivery resume --repo /path/to/project --run <run-id>
+./scripts/codex-delivery resume --run <run-id> --background
+```
+
+Resume сохраняет прежний terminal result в `state.resumes` и `artifacts/resume-*.json`, архивирует failed/running workstreams перед reset и продолжает DAG от текущего integration commit. Accepted/integrated workstreams не запускаются повторно.
+
+Если base branch нужно изменить, лучше стартовать новый run с уточнённым objective.
+
+Остановить background process без удаления artifacts:
+
+```bash
+./scripts/codex-delivery stop --run <run-id>
+```
+
+`stop` отправляет SIGTERM process group, пишет `background.stop.requested` в `events.jsonl` и обновляет `background.json`. Сам run остаётся доступен для анализа или явного `resume`.
 
 ## 8. Interactive mode
 

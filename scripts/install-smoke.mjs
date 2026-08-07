@@ -42,7 +42,10 @@ async function main() {
     const hooks = JSON.parse(await readFile(path.join(temp, '.codex', 'hooks.json'), 'utf8'));
     assert(hooks.hooks.Stop.some((group) => group.hooks?.some((hook) => hook.command === 'echo existing')));
     const deliveryCommands = Object.values(hooks.hooks).flat().flatMap((group) => group.hooks ?? []).filter((hook) => hook.command?.includes('delivery-kit/hook.mjs'));
-    assert(deliveryCommands.length >= 6);
+    const sourceHooks = JSON.parse(await readFile(path.join(ROOT, '.codex', 'hooks.json'), 'utf8'));
+    const sourceDeliveryCommands = Object.values(sourceHooks.hooks).flat().flatMap((group) => group.hooks ?? []).filter((hook) => hook.command?.includes('delivery-kit/hook.mjs'));
+    assert.equal(deliveryCommands.length, sourceDeliveryCommands.length, 'Delivery hook definitions must be replaced, not duplicated.');
+    assert(deliveryCommands.every((hook) => hook.command.includes('HOOK=')));
 
     const ignore = await readFile(path.join(temp, '.gitignore'), 'utf8');
     assert(ignore.includes('existing.tmp'));

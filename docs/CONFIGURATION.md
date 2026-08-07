@@ -18,6 +18,8 @@ startup_timeout_sec = 15
 tool_timeout_sec = 120
 ```
 
+Это локальный STDIO server. Ошибки вида `codex_apps ... HTTP 401 ... token_expired` относятся к отдельному HTTP MCP connector в Codex account/session configuration, а не к `delivery_workflow`.
+
 Модель намеренно не закреплена. Custom agents наследуют model текущего Codex session, если в TOML agent file не задан `model`.
 
 Project hooks описаны в `.codex/hooks.json`. После установки их нужно просмотреть и доверить через `/hooks`; при любом изменении definition Codex запросит повторную проверку.
@@ -67,7 +69,7 @@ Timeout одного Codex role turn и validation command.
 
 ### retainRawEvents
 
-При `false` сохраняется sanitized journal. При `true` дополнительно сохраняется raw Codex JSONL.
+При `false` сохраняется sanitized journal, per-agent `prompt.txt`, `request.json`, `response.json`, `final.json` и worker snapshots. При `true` дополнительно сохраняется raw Codex JSONL.
 
 ### keepWorkerWorktrees
 
@@ -135,7 +137,7 @@ Harness всегда задаёт:
 - discovery/planning: `read-only`;
 - writers: `workspace-write`;
 - verifier/reviewer disposable worktrees: `workspace-write`, но изменения обнаруживаются и отбрасываются;
-- approval: `never` внутри sandbox;
+- approvals: наследуются от текущего Codex CLI policy; harness явно задаёт sandbox mode;
 - `--dangerously-bypass-hook-trust` только для project hooks, уже поставленных и проверенных оператором вместе с harness.
 
 Причина `workspace-write` для verifier: многие test tools создают cache/build artifacts. Disposable worktree предотвращает попадание этих изменений в integration branch.
@@ -146,6 +148,33 @@ Harness всегда задаёт:
 
 ```bash
 ./scripts/codex-delivery run "..." --raw
+./scripts/codex-delivery run "..." --quiet
+./scripts/codex-delivery run "..." --verbose
+./scripts/codex-delivery run "..." --background
+```
+
+Если запускаете harness не из project root, передайте repository явно:
+
+```bash
+./scripts/codex-delivery run --repo /path/to/project "..."
+./scripts/codex-delivery resume --repo /path/to/project --run <run-id>
+./scripts/codex-delivery resume --repo /path/to/project --run <run-id> --background
+./scripts/codex-delivery logs --repo /path/to/project --run <run-id> --follow
+./scripts/codex-delivery status --repo /path/to/project
+./scripts/codex-delivery stop --repo /path/to/project --run <run-id>
+```
+
+Path-only invocation (`run /path/to/project`) считается ошибкой без objective.
+
+`--background` не меняет delivery semantics: создаются те же `state.json`, `events.jsonl`, `results.jsonl`, agent artifacts, snapshots и integration worktree. Дополнительно появляются `background.json` и `background.log`. Несколько active runs в одном repository разрешены, но один и тот же run нельзя запустить/resume в background второй раз, пока предыдущий PID жив.
+
+Для refresh Codex authentication используйте:
+
+```bash
+codex login status
+codex login
+codex mcp list
+codex mcp login <server-name>
 ```
 
 Raw stream может содержать:
