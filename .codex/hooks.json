@@ -1,0 +1,110 @@
+{
+  "description": "Codex Delivery Kit lifecycle telemetry and repository guardrails.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ROOT=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\"; HOOK=\"$ROOT/.codex/delivery-kit/hook.mjs\"; if [ -f \"$HOOK\" ]; then node \"$HOOK\"; fi",
+            "timeout": 10,
+            "statusMessage": "Loading delivery workflow state",
+            "additionalContextLimit": 1200
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ROOT=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\"; HOOK=\"$ROOT/.codex/delivery-kit/hook.mjs\"; if [ -f \"$HOOK\" ]; then node \"$HOOK\"; fi",
+            "timeout": 10,
+            "statusMessage": "Recording delivery prompt metadata"
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ROOT=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\"; HOOK=\"$ROOT/.codex/delivery-kit/hook.mjs\"; if [ -f \"$HOOK\" ]; then node \"$HOOK\"; fi",
+            "timeout": 10,
+            "statusMessage": "Recording subagent start",
+            "additionalContextLimit": 800
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ROOT=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\"; HOOK=\"$ROOT/.codex/delivery-kit/hook.mjs\"; if [ -f \"$HOOK\" ]; then node \"$HOOK\"; fi",
+            "timeout": 15,
+            "statusMessage": "Checking delivery scope and command policy",
+            "additionalContextLimit": 800
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ROOT=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\"; HOOK=\"$ROOT/.codex/delivery-kit/hook.mjs\"; if [ -f \"$HOOK\" ]; then node \"$HOOK\"; fi",
+            "timeout": 15,
+            "statusMessage": "Recording tool result"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ROOT=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\"; HOOK=\"$ROOT/.codex/delivery-kit/hook.mjs\"; if [ -f \"$HOOK\" ]; then node \"$HOOK\"; fi",
+            "timeout": 10,
+            "statusMessage": "Recording subagent result"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ROOT=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\"; HOOK=\"$ROOT/.codex/delivery-kit/hook.mjs\"; if [ -f \"$HOOK\" ]; then node \"$HOOK\"; fi",
+            "timeout": 10,
+            "statusMessage": "Recording turn completion"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "other",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ROOT=\"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\"; HOOK=\"$ROOT/.codex/delivery-kit/hook.mjs\"; if [ -f \"$HOOK\" ]; then node \"$HOOK\"; fi",
+            "timeout": 3,
+            "statusMessage": "Closing delivery telemetry"
+          }
+        ]
+      }
+    ]
+  }
+}

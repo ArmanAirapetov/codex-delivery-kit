@@ -1,0 +1,11 @@
+[agents]
+max_concurrent_threads_per_session = 6
+
+[features]
+hooks = true
+
+[mcp_servers.delivery_workflow]
+command = "node"
+args = [".codex/delivery-kit/mcp-server.mjs"]
+startup_timeout_sec = 15
+tool_timeout_sec = 120
