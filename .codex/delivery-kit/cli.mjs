@@ -1242,6 +1242,7 @@ export async function executeDelivery({ cwd = process.cwd(), objective, options 
   const repo = await assertUsableRepository(initialRepo, { allowDirty: config.allowDirty });
   const availability = await codexAvailable(config.codexBinary);
   if (!availability.available) throw new Error(`Codex CLI '${config.codexBinary}' is not available.`);
+  await notifyActiveDeliveryRuns(repo);
   const state = await initRun(repo, objective, config);
   await appendEvent(repo, state, { type: 'environment.codex', version: availability.version });
   return continueDelivery(repo, state, config);
@@ -1255,6 +1256,7 @@ export async function continueInitializedDelivery({ cwd = process.cwd(), options
   const availability = await codexAvailable(config.codexBinary);
   if (!availability.available) throw new Error(`Codex CLI '${config.codexBinary}' is not available.`);
   if (!options.run) throw new Error('No initialized delivery run selected.');
+  if (!options.backgroundChild) await notifyActiveDeliveryRuns(repo, { excludeRunId: options.run });
   const state = attachProgress(await loadState(repo, options.run), config);
   await appendEvent(repo, state, { type: 'environment.codex', version: availability.version });
   return continueDelivery(repo, state, config);
@@ -1269,6 +1271,10 @@ export async function resumeDelivery({ cwd = process.cwd(), options = {} }) {
   if (!availability.available) throw new Error(`Codex CLI '${config.codexBinary}' is not available.`);
   const runId = options.run || await latestRunId(repo);
   if (!runId) throw new Error('No delivery run selected.');
+  if (!options.backgroundChild) {
+    await assertNoActiveBackgroundForRun(repo, runId);
+    await notifyActiveDeliveryRuns(repo, { excludeRunId: runId });
+  }
   const state = attachProgress(await loadState(repo, runId), config);
   await appendEvent(repo, state, { type: 'environment.codex', version: availability.version });
   await normalizeStateForResume(repo, state, config);
@@ -1281,6 +1287,7 @@ async function startBackgroundRun({ cwd = process.cwd(), objective, options = {}
   const repo = await assertUsableRepository(initialRepo, { allowDirty: config.allowDirty });
   const availability = await codexAvailable(config.codexBinary);
   if (!availability.available) throw new Error(`Codex CLI '${config.codexBinary}' is not available.`);
+  await notifyActiveDeliveryRuns(repo);
   const state = await initRun(repo, objective, config);
   await writeBackgroundRecord(repo, state.runId, {
     runId: state.runId,
@@ -1306,6 +1313,7 @@ async function startBackgroundResume({ cwd = process.cwd(), options = {} }) {
   const runId = options.run || await latestRunId(repo);
   if (!runId) throw new Error('No delivery run selected.');
   await assertNoActiveBackgroundForRun(repo, runId);
+  await notifyActiveDeliveryRuns(repo, { excludeRunId: runId });
   const state = await loadState(repo, runId);
   if (state.phase === 'accepted') throw new UserFacingError(`Run ${runId} is already accepted; nothing to resume.`);
   await writeBackgroundRecord(repo, runId, {
@@ -1343,8 +1351,8 @@ async function backgroundChildCommand(options) {
   try {
     await updateBackgroundRecord(repo, runId, { status: 'running', pid: process.pid, lastHeartbeatAt: now() });
     final = mode === 'resume'
-      ? await resumeDelivery({ cwd: repo, options })
-      : await continueInitializedDelivery({ cwd: repo, options });
+      ? await resumeDelivery({ cwd: repo, options: { ...options, backgroundChild: true } })
+      : await continueInitializedDelivery({ cwd: repo, options: { ...options, backgroundChild: true } });
     return final;
   } catch (error) {
     exitCode = 1;

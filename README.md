@@ -152,6 +152,7 @@ Background режим сразу возвращает `runId`, `pid` и пути
 ```
 
 Несколько background runs в одном repository разрешены; каждый run получает собственные worktrees и run artifacts. Для одного и того же run повторный background resume отклоняется, если прежний background process ещё жив.
+Если в repository уже есть active delivery process, новый `run`/`resume` печатает notice в stderr с `runId`, `pid` и командой `logs --follow`. Это предупреждение не блокирует отдельный новый run, но same-run duplicate background resume остаётся ошибкой.
 
 Результат не применяется автоматически к текущей ветке. Accepted run оставляет отдельную integration branch и worktree. После проверки оператор может выполнить merge/cherry-pick обычными средствами Git.
 

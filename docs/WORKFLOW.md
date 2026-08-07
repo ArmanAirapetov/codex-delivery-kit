@@ -47,6 +47,16 @@ Foreground запуск пишет concise sanitized progress в stderr и фи�
 
 Команда вернёт `runId`, `pid`, `statePath`, `eventsPath` и `backgroundLogPath`, а delivery продолжится в background process.
 
+Если при новом `run`/`resume` уже виден active delivery process в этом repository, CLI печатает notice в stderr:
+
+```text
+[codex-delivery] Notice: another Codex delivery process appears active in this repository.
+  - run=<run-id> pid=<pid> mode=run status=running
+    follow: ./scripts/codex-delivery logs --follow --run <run-id>
+```
+
+Отдельные runs всё ещё разрешены. Duplicate background process для того же `runId` блокируется.
+
 ## 4. Наблюдение
 
 В другом terminal:

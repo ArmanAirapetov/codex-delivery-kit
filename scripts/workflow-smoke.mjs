@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
+import { activeDeliveryRuns, renderActiveDeliveryWarning } from '../.codex/delivery-kit/cli.mjs';
 import { git, runProcess } from '../.codex/delivery-kit/lib/git.mjs';
 import { renderProgressLine } from '../.codex/delivery-kit/lib/progress.mjs';
 
@@ -111,6 +112,23 @@ async function renderedEvents(repoPath, runId, { verbose = false } = {}) {
 function parseJsonOutput(result) {
   return result.stdout.trim() ? JSON.parse(result.stdout) : null;
 }
+
+const activeWarningRepo = path.join(temp, 'active-warning-repo');
+const activeWarningRun = 'active-warning-run';
+await mkdir(path.join(activeWarningRepo, '.codex', 'delivery-runs', activeWarningRun), { recursive: true });
+await writeFile(path.join(activeWarningRepo, '.codex', 'delivery-runs', activeWarningRun, 'background.json'), JSON.stringify({
+  runId: activeWarningRun,
+  repo: activeWarningRepo,
+  mode: 'run',
+  status: 'running',
+  pid: process.pid,
+  startedAt: new Date().toISOString(),
+  lastHeartbeatAt: new Date().toISOString(),
+}, null, 2));
+const activeWarnings = await activeDeliveryRuns(activeWarningRepo);
+assert.equal(activeWarnings.length, 1);
+assert.equal(activeWarnings[0].runId, activeWarningRun);
+assert.match(renderActiveDeliveryWarning(activeWarnings), /already|appears active|Codex delivery process/);
 
 const missingObjective = await runProcess('node', [cli, 'run', repo], { cwd: kitRoot, env, timeoutMs: 60000, maxOutputBytes: 1024 * 1024 });
 assert.notEqual(missingObjective.code, 0, 'Path-only run should fail before starting a delivery run.');
