@@ -13,6 +13,18 @@ export async function codexAvailable(binary = 'codex') {
   });
 }
 
+function signalProcessTree(child, signal) {
+  if (!child?.pid) return;
+  try {
+    if (process.platform === 'win32') child.kill(signal);
+    else process.kill(-child.pid, signal);
+  } catch (error) {
+    if (error?.code !== 'ESRCH') {
+      // Best-effort cleanup: process groups can already be gone or partially reaped.
+    }
+  }
+}
+
 export async function runCodex({
   binary = 'codex',
   cwd,
@@ -90,6 +102,7 @@ export async function runCodex({
   const result = await new Promise((resolve, reject) => {
     const child = spawn(binary, args, {
       cwd,
+      detached: process.platform !== 'win32',
       env: {
         ...process.env,
         CODEX_DELIVERY_RUN_ID: state.runId,
@@ -134,13 +147,23 @@ export async function runCodex({
       if (stderr.length > 4 * 1024 * 1024) stderr = stderr.slice(-4 * 1024 * 1024);
     });
     child.on('error', reject);
+    let killTimer = null;
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill('SIGTERM');
-      setTimeout(() => child.kill('SIGKILL'), 5000).unref();
+      signalProcessTree(child, 'SIGTERM');
+      killTimer = setTimeout(() => signalProcessTree(child, 'SIGKILL'), 5000);
+      killTimer.unref();
     }, timeoutMs);
     child.on('close', async (code, signal) => {
       clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
+      if (process.platform !== 'win32') {
+        try {
+          signalProcessTree(child, 'SIGTERM');
+        } catch {
+          // Best-effort cleanup for helper descendants that survived codex exit.
+        }
+      }
       if (stdoutBuffer.trim()) chain = chain.then(() => consumeLine(stdoutBuffer));
       await chain;
       resolve({ code: code ?? -1, signal });

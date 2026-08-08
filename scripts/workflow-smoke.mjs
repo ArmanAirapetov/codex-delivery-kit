@@ -37,6 +37,7 @@ await git(repo, ['commit', '-m', 'initial']);
 const fakeCodex = path.join(fakeBin, 'codex');
 await writeFile(fakeCodex, `#!/usr/bin/env python3
 import json, os, pathlib, sys, time, uuid
+import subprocess
 args=sys.argv[1:]
 if '--version' in args:
     print('codex-cli 0.143.0-fake')
@@ -49,6 +50,9 @@ out=pathlib.Path(value('--output-last-message'))
 cwd=pathlib.Path(value('--cd'))
 prompt=sys.stdin.read()
 if 'Stop background smoke' in prompt:
+    time.sleep(30)
+if schema=='worker.schema.json' and 'Timeout worker smoke' in prompt:
+    subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])
     time.sleep(30)
 if schema=='discovery.schema.json':
     result={'status':'completed','summary':'Discovery complete','results':[{'kind':'discovery','title':'Repository mapped','summary':'Relevant files found','details':[],'paths':['src/a.txt','tests/a.test.txt'],'confidence':'high','tags':['smoke']}],'blockingQuestions':[]}
@@ -289,6 +293,15 @@ const quietJson = parseJsonOutput(quietRun);
 if (quietJson) assert.equal(quietJson.status, 'accepted');
 const quietLatest = await latestRun(repo);
 await runProcess('node', [cli, 'cleanup', '--repo', repo, '--run', quietLatest, '--integration'], { cwd: kitRoot, env, rejectOnError: true });
+
+const timeoutRun = await runProcess('node', [cli, 'run', '--repo', repo, 'Timeout worker smoke', '--timeout-minutes', '0.01', '--max-parallel', '1'], { cwd: kitRoot, env, timeoutMs: 15000, maxOutputBytes: 10 * 1024 * 1024 });
+assert.notEqual(timeoutRun.code, 0, 'Timeout smoke should fail the worker turn.');
+assert.ok(timeoutRun.durationMs < 10000, `Timeout smoke took too long: ${timeoutRun.durationMs}ms`);
+const timeoutLatest = await latestRun(repo);
+const timeoutResponse = JSON.parse(await readFile(path.join(repo, '.codex', 'delivery-runs', timeoutLatest, 'agents', 'workstream-W1', 'response.json'), 'utf8'));
+assert.equal(timeoutResponse.timedOut, true);
+assert.match(await renderedEvents(repo, timeoutLatest), /\[agent\] workstream-W1 failed/);
+await runProcess('node', [cli, 'cleanup', '--repo', repo, '--run', timeoutLatest, '--integration'], { cwd: kitRoot, env, rejectOnError: true });
 
 const resumeRepo = path.join(temp, 'resume-repo');
 await mkdir(path.join(resumeRepo, 'src'), { recursive: true });
