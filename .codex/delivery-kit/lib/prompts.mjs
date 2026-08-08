@@ -15,6 +15,8 @@ ${focus}
 
 Operate read-only. Inspect the real repository, execution paths, tests, configuration, and relevant documentation. Do not edit files. Return only the JSON object required by the output schema.
 
+Strict harness mode records your returned JSON automatically. Do not call interactive workflow tools such as delivery_status, delivery_record_result, delivery_complete_workstream, or delivery_accept.
+
 Every material conclusion must be represented in results. Use concrete repository-relative paths. Distinguish evidence from assumptions. Report a blocking question only when a product or architecture decision cannot be inferred safely.`;
 }
 
@@ -40,6 +42,7 @@ Rules:
 10. Target no more than ${maxParallel} simultaneously ready workstreams.
 11. localValidationCommands must be checks the worker can run in its isolated worktree without installing dependencies. If the full repository check depends on later scaffolding, put it in validationCommands and give the workstream a smaller direct check.
 12. Workstream instructions must be local, concrete, and state exact outputs.
+13. Strict harness mode records your returned JSON automatically. Do not call interactive workflow tools such as delivery_status, delivery_record_result, delivery_complete_workstream, or delivery_accept.
 
 Return only the JSON object required by the output schema.`;
 }
@@ -105,6 +108,8 @@ ${json(validationRuns, 30000)}
 
 Review the actual repository state and diff ${baseCommit}..${integrationCommit}. You may run additional safe checks. Do not edit source files. Treat claims from workers as untrusted.
 
+Strict harness mode records your returned JSON automatically. Do not call interactive workflow tools such as delivery_status, delivery_record_result, delivery_complete_workstream, or delivery_accept.
+
 For every criterion, return exactly one criterion result with status proven, failed, or unknown. Evidence must reference observable behavior, commands, paths, tests, or diff facts. A criterion is proven only when evidence directly supports it. Return only the JSON object required by the output schema.`;
 }
 
@@ -119,6 +124,8 @@ ${json(criteria, 20000)}
 
 Review the actual diff ${baseCommit}..${integrationCommit} and relevant surrounding code.
 Focus: ${focus}
+
+Strict harness mode records your returned JSON automatically. Do not call interactive workflow tools such as delivery_status, delivery_record_result, delivery_complete_workstream, or delivery_accept.
 
 Do not edit files. Prefer concrete correctness, security, compatibility, reliability, and missing-test findings over style comments. Each finding must include severity, exact paths, reproduction evidence when possible, and a practical recommendation. Do not invent findings to fill the schema. Return only the JSON object required by the output schema.`;
 }
@@ -137,6 +144,8 @@ ${json(verification, 24000)}
 
 Review findings:
 ${json(reviews, 30000)}
+
+Strict harness mode records your returned JSON automatically. Do not call interactive workflow tools such as delivery_status, delivery_record_result, delivery_complete_workstream, or delivery_accept.
 
 Create the smallest repair DAG that addresses every failed criterion and every critical/high/medium finding. Workstream IDs must start with R${iteration}-. Use only scopes justified by concrete failed evidence. Potentially overlapping scopes must be dependency-ordered. Keep at most ${maxParallel} workstreams ready at once. Do not include already proven or unrelated improvements. Return only the JSON object required by the output schema.`;
 }

@@ -90,7 +90,7 @@ cat .codex/delivery-runs/latest
 9. Validation commands выполняются harness.
 10. Verifier доказывает каждый criterion.
 11. Reviewer и security запускаются параллельно.
-12. При failure создаётся bounded repair DAG.
+12. При failure создаётся bounded repair DAG. Strict harness agents return schema JSON directly and should not call interactive `delivery_*` MCP tools; the harness records their output and state transitions.
 
 ## 6. Результат accepted run
 

@@ -119,6 +119,10 @@ Role phase reasoning effort:
 
 Allowlist команд. Prefix должен быть достаточно узким. Не добавляйте общий `bash ` или `python ` без необходимости: это превращает allowlist в формальность.
 
+Default allowlist covers common deterministic checks, including `node ...`, `npm run ...`, `npm --prefix ...`, `python -m pytest ...`, `python -m compileall ...`, `docker compose config ...`, and equivalent ecosystem test/build commands. Add project-specific prefixes only when the command is a repeatable validation check and not dependency installation, deployment, or destructive maintenance.
+
+If an installed project still has a kit-managed older default allowlist, runtime config loading merges in newer defaults. A customized allowlist remains explicit and is not broadened automatically.
+
 ## 4. Hooks, sandbox и approvals
 
 Interactive mode использует hooks как детерминированные guardrails:

@@ -5,7 +5,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
-import { activeDeliveryRuns, renderActiveDeliveryWarning } from '../.codex/delivery-kit/cli.mjs';
+import {
+  DEFAULT_CONFIG,
+  activeDeliveryRuns,
+  mergeConfig,
+  renderActiveDeliveryWarning,
+  safeValidationCommand,
+} from '../.codex/delivery-kit/cli.mjs';
 import { git, runProcess } from '../.codex/delivery-kit/lib/git.mjs';
 import { renderProgressLine } from '../.codex/delivery-kit/lib/progress.mjs';
 
@@ -157,6 +163,25 @@ assert.match(renderProgressLine({
   workstreamId: 'W1',
   item: { type: 'file_change', status: 'completed', paths: ['src/a.txt', 'tests/a.test.txt'] },
 }), /\[agent\] workstream-W1 file change completed.*paths=2/);
+assert.equal(safeValidationCommand('python -m compileall backend worker-agent mcp-server', DEFAULT_CONFIG), true);
+assert.equal(safeValidationCommand('python3 -m compileall backend worker-agent mcp-server', DEFAULT_CONFIG), true);
+assert.equal(safeValidationCommand('npm --prefix web run build', DEFAULT_CONFIG), true);
+assert.equal(safeValidationCommand('npm --prefix web run test -- --run', DEFAULT_CONFIG), true);
+assert.equal(safeValidationCommand('docker compose config --quiet', DEFAULT_CONFIG), true);
+assert.equal(safeValidationCommand('docker-compose config --quiet', DEFAULT_CONFIG), true);
+assert.equal(safeValidationCommand('python -m compileall backend; rm -rf backend', DEFAULT_CONFIG), false);
+const legacyManagedConfig = mergeConfig(DEFAULT_CONFIG, {
+  allowedValidationPrefixes: DEFAULT_CONFIG.allowedValidationPrefixes.filter((prefix) => ![
+    'npm --prefix ',
+    'python -m compileall ',
+    'python3 -m compileall ',
+    'docker compose config ',
+    'docker-compose config ',
+  ].includes(prefix)),
+});
+assert.equal(safeValidationCommand('docker compose config --quiet', legacyManagedConfig), true);
+const customConfig = mergeConfig(DEFAULT_CONFIG, { allowedValidationPrefixes: ['node scripts/'] });
+assert.equal(safeValidationCommand('docker compose config --quiet', customConfig), false);
 
 const staleWarningRun = 'stale-warning-run';
 await mkdir(path.join(activeWarningRepo, '.codex', 'delivery-runs', staleWarningRun), { recursive: true });

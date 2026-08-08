@@ -74,7 +74,7 @@ const BOOLEAN_OPTIONS = new Set([
 const BACKGROUND_TERMINAL_STATUSES = new Set(['exited', 'failed', 'stopped']);
 const DELIVERY_TERMINAL_PHASES = new Set(['accepted', 'blocked', 'failed']);
 const DEFAULT_FOLLOW_TAIL = 80;
-const DEFAULT_CONFIG = {
+export const DEFAULT_CONFIG = {
   codexBinary: 'codex',
   maxParallel: 4,
   maxRepairs: 2,
@@ -102,12 +102,23 @@ const DEFAULT_CONFIG = {
   ],
   allowedValidationPrefixes: [
     'npm test', 'npm run ', 'npx ', 'pnpm ', 'yarn ', 'bun ',
-    'pytest', 'python -m pytest', 'python3 -m pytest', 'ruff ', 'mypy ',
+    'npm --prefix ',
+    'pytest', 'python -m pytest', 'python3 -m pytest', 'python -m compileall ', 'python3 -m compileall ',
+    'ruff ', 'mypy ',
     'cargo test', 'cargo check', 'cargo clippy', 'go test', 'go vet',
     'make', 'cmake --build', './gradlew ', 'gradle ', 'mvn ', 'dotnet test',
+    'docker compose config ', 'docker-compose config ',
     'node ', 'bash scripts/', './scripts/',
   ],
 };
+
+const LEGACY_DEFAULT_ALLOWED_VALIDATION_PREFIXES = [
+  'npm test', 'npm run ', 'npx ', 'pnpm ', 'yarn ', 'bun ',
+  'pytest', 'python -m pytest', 'python3 -m pytest', 'ruff ', 'mypy ',
+  'cargo test', 'cargo check', 'cargo clippy', 'go test', 'go vet',
+  'make', 'cmake --build', './gradlew ', 'gradle ', 'mvn ', 'dotnet test',
+  'node ', 'bash scripts/', './scripts/',
+];
 
 function parseArgs(argv) {
   const args = [...argv];
@@ -214,12 +225,22 @@ async function repositoryRootFor(cwd) {
   }
 }
 
-function mergeConfig(base, override) {
+function mergeAllowedValidationPrefixes(base, override) {
+  if (!Array.isArray(override?.allowedValidationPrefixes)) return base.allowedValidationPrefixes;
+  const configured = override.allowedValidationPrefixes;
+  const knownManagedDefaults = new Set([...base.allowedValidationPrefixes, ...LEGACY_DEFAULT_ALLOWED_VALIDATION_PREFIXES]);
+  const looksManaged = configured.every((prefix) => knownManagedDefaults.has(prefix));
+  if (!looksManaged) return configured;
+  return [...new Set([...base.allowedValidationPrefixes, ...configured])];
+}
+
+export function mergeConfig(base, override) {
   return {
     ...base,
     ...override,
     reasoning: { ...base.reasoning, ...(override?.reasoning ?? {}) },
     models: { ...base.models, ...(override?.models ?? {}) },
+    allowedValidationPrefixes: mergeAllowedValidationPrefixes(base, override),
   };
 }
 
@@ -968,7 +989,7 @@ function hasUnsafeShellSyntax(command) {
   return /[;&|><`\n\r]|\$\(|\$\{|\b(?:sudo|su|rm\s+-rf|mkfs|dd\s+if=|shutdown|reboot|curl\s+[^\n]*\|\s*(?:sh|bash)|wget\s+[^\n]*\|\s*(?:sh|bash))\b/i.test(command);
 }
 
-function safeValidationCommand(command, config) {
+export function safeValidationCommand(command, config) {
   const trimmed = command.trim();
   if (!trimmed || hasUnsafeShellSyntax(trimmed)) return false;
   return config.allowedValidationPrefixes.some((prefix) => trimmed === prefix.trim() || trimmed.startsWith(prefix));
