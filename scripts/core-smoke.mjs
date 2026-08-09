@@ -7,6 +7,7 @@ import {
   readyWorkstreams,
   scopeMatches,
   scopesMayOverlap,
+  serializeOverlappingWorkstreams,
   topologicalOrder,
   transition,
   validateWorkstreams,
@@ -35,6 +36,18 @@ assert.throws(() => validateWorkstreams([
   { id: 'A1', title: 'A', role: 'implementer', scope: ['src/**'], dependsOn: [], criterionIds: ['AC-1'], required: true },
   { id: 'A2', title: 'B', role: 'implementer', scope: ['src/api/**'], dependsOn: [], criterionIds: ['AC-2'], required: true },
 ], criteria), /overlapping scopes/);
+const serializedOverlap = serializeOverlappingWorkstreams([
+  { id: 'A1', title: 'A', role: 'implementer', scope: ['src/**'], dependsOn: [], criterionIds: ['AC-1'], required: true },
+  { id: 'A2', title: 'B', role: 'implementer', scope: ['src/api/**'], dependsOn: [], criterionIds: ['AC-2'], required: true },
+]);
+assert.deepEqual(serializedOverlap.addedDependencies, [{ workstreamId: 'A2', dependsOn: 'A1' }]);
+validateWorkstreams(serializedOverlap.workstreams, criteria);
+const alreadyOrderedOverlap = serializeOverlappingWorkstreams([
+  { id: 'A1', title: 'A', role: 'implementer', scope: ['src/**'], dependsOn: ['A2'], criterionIds: ['AC-1'], required: true },
+  { id: 'A2', title: 'B', role: 'implementer', scope: ['src/api/**'], dependsOn: [], criterionIds: ['AC-2'], required: true },
+]);
+assert.deepEqual(alreadyOrderedOverlap.addedDependencies, []);
+validateWorkstreams(alreadyOrderedOverlap.workstreams, criteria);
 
 assert.throws(() => validateWorkstreams([
   { id: 'C1', title: 'A', role: 'implementer', scope: ['a/**'], dependsOn: ['C2'], criterionIds: ['AC-1'], required: true },

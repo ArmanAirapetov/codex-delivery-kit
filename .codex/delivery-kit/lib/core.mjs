@@ -217,6 +217,22 @@ export function validateWorkstreams(workstreams, criterionIds = new Set()) {
   }
   topologicalOrder(workstreams);
 
+  const ancestors = dependencyAncestors(workstreams);
+  for (let leftIndex = 0; leftIndex < workstreams.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < workstreams.length; rightIndex += 1) {
+      const left = workstreams[leftIndex];
+      const right = workstreams[rightIndex];
+      if (!scopesMayOverlap(left.scope, right.scope)) continue;
+      const ordered = ancestors.get(left.id).has(right.id) || ancestors.get(right.id).has(left.id);
+      if (!ordered) {
+        throw new Error(`Potentially overlapping scopes must be dependency-ordered: '${left.id}' and '${right.id}'.`);
+      }
+    }
+  }
+}
+
+export function dependencyAncestors(workstreams) {
+  topologicalOrder(workstreams);
   const ancestors = new Map();
   const visit = (id) => {
     if (ancestors.has(id)) return ancestors.get(id);
@@ -229,17 +245,30 @@ export function validateWorkstreams(workstreams, criterionIds = new Set()) {
     return result;
   };
   for (const item of workstreams) visit(item.id);
-  for (let leftIndex = 0; leftIndex < workstreams.length; leftIndex += 1) {
-    for (let rightIndex = leftIndex + 1; rightIndex < workstreams.length; rightIndex += 1) {
-      const left = workstreams[leftIndex];
-      const right = workstreams[rightIndex];
+  return ancestors;
+}
+
+export function serializeOverlappingWorkstreams(workstreams) {
+  const normalized = workstreams.map((item) => ({
+    ...item,
+    dependsOn: [...new Set((item.dependsOn ?? []).map(String))],
+  }));
+  const addedDependencies = [];
+  topologicalOrder(normalized);
+  for (let leftIndex = 0; leftIndex < normalized.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < normalized.length; rightIndex += 1) {
+      const left = normalized[leftIndex];
+      const right = normalized[rightIndex];
       if (!scopesMayOverlap(left.scope, right.scope)) continue;
-      const ordered = ancestors.get(left.id).has(right.id) || ancestors.get(right.id).has(left.id);
-      if (!ordered) {
-        throw new Error(`Potentially overlapping scopes must be dependency-ordered: '${left.id}' and '${right.id}'.`);
-      }
+      const ancestors = dependencyAncestors(normalized);
+      const alreadyOrdered = ancestors.get(left.id).has(right.id) || ancestors.get(right.id).has(left.id);
+      if (alreadyOrdered) continue;
+      right.dependsOn = [...new Set([...right.dependsOn, left.id])];
+      addedDependencies.push({ workstreamId: right.id, dependsOn: left.id });
     }
   }
+  topologicalOrder(normalized);
+  return { workstreams: normalized, addedDependencies };
 }
 
 export function topologicalOrder(workstreams) {

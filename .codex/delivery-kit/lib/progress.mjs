@@ -80,6 +80,8 @@ export function renderProgressLine(event, { verbose = false, repo = null } = {})
       return `[checkpoint] ${event.checkpoint}${event.tracks ? ` tracks=${event.tracks}` : ''}`;
     case 'workflow.plan.approved':
       return `[plan] approved workstreams=${event.workstreams} criteria=${event.criteria}`;
+    case 'workflow.plan.normalized':
+      return `[plan] normalized dependencies=${(event.addedDependencies ?? []).length}`;
     case 'workflow.error':
       return `[error] ${event.error ?? 'workflow error'}`;
     case 'workflow.accepted':
@@ -223,6 +225,8 @@ export function renderProgressLine(event, { verbose = false, repo = null } = {})
       return `[inspection] ${event.role} discarded mutations paths=${list(event.paths)}`;
     case 'repair.plan.approved':
       return `[repair] iteration=${event.iteration} workstreams=${list(event.workstreams)}`;
+    case 'repair.plan.normalized':
+      return `[repair] iteration=${event.iteration} normalized dependencies=${(event.addedDependencies ?? []).length}`;
     case 'quality.gate':
       return `[gate] ${event.passed ? 'passed' : 'failed'} commands=${event.failedCommands} criteria=${event.failedCriteria} findings=${event.blockingFindings}`;
     case 'background.started':

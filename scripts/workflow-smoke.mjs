@@ -163,6 +163,11 @@ assert.match(renderProgressLine({
   workstreamId: 'W1',
   item: { type: 'file_change', status: 'completed', paths: ['src/a.txt', 'tests/a.test.txt'] },
 }), /\[agent\] workstream-W1 file change completed.*paths=2/);
+assert.match(renderProgressLine({
+  type: 'repair.plan.normalized',
+  iteration: 3,
+  addedDependencies: [{ workstreamId: 'R3-b', dependsOn: 'R3-a' }],
+}), /\[repair\] iteration=3 normalized dependencies=1/);
 assert.equal(safeValidationCommand('python -m compileall backend worker-agent mcp-server', DEFAULT_CONFIG), true);
 assert.equal(safeValidationCommand('python3 -m compileall backend worker-agent mcp-server', DEFAULT_CONFIG), true);
 assert.equal(safeValidationCommand('npm --prefix web run build', DEFAULT_CONFIG), true);

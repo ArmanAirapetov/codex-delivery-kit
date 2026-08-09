@@ -21,6 +21,7 @@ import {
   runPaths,
   saveState,
   scopeMatches,
+  serializeOverlappingWorkstreams,
   slugify,
   topologicalOrder,
   transition,
@@ -659,11 +660,12 @@ function normalizePlan(plan) {
     dependsOn: [...new Set(item.dependsOn.map(String))],
     criterionIds: [...new Set(item.criterionIds.map(String))],
   }));
-  validateWorkstreams(workstreams, new Set(acceptanceCriteria.map((item) => item.id)));
+  const serialized = serializeOverlappingWorkstreams(workstreams);
+  validateWorkstreams(serialized.workstreams, new Set(acceptanceCriteria.map((item) => item.id)));
   const covered = new Set(workstreams.filter((item) => item.required !== false).flatMap((item) => item.criterionIds));
   const missing = acceptanceCriteria.filter((item) => !covered.has(item.id));
   if (missing.length) throw new Error(`Required workstreams do not cover: ${missing.map((item) => item.id).join(', ')}`);
-  return { acceptanceCriteria, workstreams };
+  return { acceptanceCriteria, workstreams: serialized.workstreams, addedDependencies: serialized.addedDependencies };
 }
 
 async function runPlanning(repo, state, config, discoveries) {
@@ -691,7 +693,10 @@ async function runPlanning(repo, state, config, discoveries) {
   };
   state.validation.commands = [...new Set(run.final.validationCommands)];
   state.workstreams = instantiateWorkstreams(normalized.workstreams, 0);
-  await writeJsonAtomic(path.join(runPaths(repo, state.runId).artifacts, 'plan.json'), run.final);
+  await writeJsonAtomic(path.join(runPaths(repo, state.runId).artifacts, 'plan.json'), { ...run.final, workstreams: normalized.workstreams });
+  if (normalized.addedDependencies.length) {
+    await appendEvent(repo, state, { type: 'workflow.plan.normalized', addedDependencies: normalized.addedDependencies });
+  }
   for (const risk of run.final.risks ?? []) await appendResult(repo, state, { kind: 'risk', title: 'Planning risk', summary: risk, role: 'architect', confidence: 'medium', tags: ['planning'] });
   for (const assumption of run.final.assumptions ?? []) await appendResult(repo, state, { kind: 'assumption', title: 'Planning assumption', summary: assumption, role: 'architect', confidence: 'medium', tags: ['planning'] });
   transition(state, 'implementation', 'contract and workstream DAG approved');
@@ -1156,10 +1161,14 @@ async function planRepair(repo, state, config, gate) {
     }),
   });
   if (!run.ok) throw new Error('Repair planner failed.');
-  validateWorkstreams(run.final.workstreams, new Set(state.acceptanceCriteria.map((item) => item.id)));
-  const repairWorkstreams = instantiateWorkstreams(run.final.workstreams, state.repairIteration);
+  const serialized = serializeOverlappingWorkstreams(run.final.workstreams);
+  validateWorkstreams(serialized.workstreams, new Set(state.acceptanceCriteria.map((item) => item.id)));
+  const repairWorkstreams = instantiateWorkstreams(serialized.workstreams, state.repairIteration);
   state.workstreams.push(...repairWorkstreams);
-  await writeJsonAtomic(path.join(runPaths(repo, state.runId).artifacts, `repair-plan-${state.repairIteration}.json`), run.final);
+  await writeJsonAtomic(path.join(runPaths(repo, state.runId).artifacts, `repair-plan-${state.repairIteration}.json`), { ...run.final, workstreams: serialized.workstreams });
+  if (serialized.addedDependencies.length) {
+    await appendEvent(repo, state, { type: 'repair.plan.normalized', iteration: state.repairIteration, addedDependencies: serialized.addedDependencies });
+  }
   await appendEvent(repo, state, { type: 'repair.plan.approved', iteration: state.repairIteration, workstreams: repairWorkstreams.map((item) => item.id) });
   await saveState(repo, state);
   return repairWorkstreams;
