@@ -73,6 +73,7 @@ const BOOLEAN_OPTIONS = new Set([
   'json',
   'keepWorktrees',
   'logs',
+  'noColor',
   'quiet',
   'raw',
   'verbose',
@@ -98,6 +99,32 @@ const HUMAN_REVIEW_DECISION_SHORTCUTS = new Map([
   ['a', 'acknowledged'],
   ['ack', 'acknowledged'],
 ]);
+const HUMAN_REVIEW_DECISION_META = {
+  repair_requested: {
+    shortcut: 'r',
+    label: 'Repair with Codex',
+    description: 'Ask the next resume repair plan to address this item.',
+    color: 'cyan',
+  },
+  environment_required: {
+    shortcut: 'e',
+    label: 'Fix environment',
+    description: 'Resolve missing local tools, dependencies, services, or credentials before resume.',
+    color: 'yellow',
+  },
+  manual_required: {
+    shortcut: 'm',
+    label: 'Manual work',
+    description: 'Record that a human must handle or verify this outside automated repair.',
+    color: 'magenta',
+  },
+  acknowledged: {
+    shortcut: 'a',
+    label: 'Acknowledge only',
+    description: 'Record awareness without asking Codex to repair this item.',
+    color: 'dim',
+  },
+};
 const BLOCKING_FINDING_SEVERITIES = new Set(['critical', 'high', 'medium']);
 export const DEFAULT_CONFIG = {
   codexBinary: 'codex',
@@ -178,6 +205,43 @@ function resolveCliPath(value, base = process.cwd()) {
 
 function shellExample(command) {
   return `  ${command}`;
+}
+
+function createCliTheme(stream = process.stdout, options = {}) {
+  const force = process.env.FORCE_COLOR && process.env.FORCE_COLOR !== '0';
+  const enabled = !options.noColor && !process.env.NO_COLOR && process.env.TERM !== 'dumb' && (force || stream?.isTTY);
+  const codes = {
+    reset: '\u001b[0m',
+    bold: '\u001b[1m',
+    dim: '\u001b[2m',
+    red: '\u001b[31m',
+    green: '\u001b[32m',
+    yellow: '\u001b[33m',
+    blue: '\u001b[34m',
+    magenta: '\u001b[35m',
+    cyan: '\u001b[36m',
+    gray: '\u001b[90m',
+  };
+  const paint = (style, value) => {
+    const text = String(value ?? '');
+    return enabled && codes[style] ? `${codes[style]}${text}${codes.reset}` : text;
+  };
+  return {
+    enabled,
+    bold: (value) => paint('bold', value),
+    dim: (value) => paint('dim', value),
+    red: (value) => paint('red', value),
+    green: (value) => paint('green', value),
+    yellow: (value) => paint('yellow', value),
+    blue: (value) => paint('blue', value),
+    magenta: (value) => paint('magenta', value),
+    cyan: (value) => paint('cyan', value),
+    gray: (value) => paint('gray', value),
+    decision(decision, value = decision) {
+      const meta = HUMAN_REVIEW_DECISION_META[decision];
+      return paint(meta?.color ?? 'bold', value);
+    },
+  };
 }
 
 function missingObjectiveMessage(repo = null) {
@@ -1799,19 +1863,54 @@ async function latestRunId(repo) {
   }
 }
 
-function renderReviewItem(item, index, total) {
+function decisionLabel(decision, theme = createCliTheme()) {
+  const meta = HUMAN_REVIEW_DECISION_META[decision];
+  if (!meta) return decision;
+  return `${theme.decision(decision, decision)} ${theme.dim(`(${meta.label})`)}`;
+}
+
+function renderDecisionHelp(theme = createCliTheme()) {
+  const lines = [
+    theme.bold('Actions'),
+    ...HUMAN_REVIEW_DECISION_VALUES.map((decision) => {
+      const meta = HUMAN_REVIEW_DECISION_META[decision];
+      return `  ${theme.decision(decision, `[${meta.shortcut}] ${decision}`)} - ${meta.description}`;
+    }),
+  ];
+  return lines.join('\n');
+}
+
+function reviewTypeLabel(item, theme) {
+  if (item.type === 'validation') return theme.yellow('validation');
+  if (item.type === 'criterion') return theme.blue('criterion');
+  if (item.type === 'finding') {
+    if (item.severity === 'critical' || item.severity === 'high') return theme.red('finding');
+    return theme.magenta('finding');
+  }
+  return item.type;
+}
+
+function defaultActionReason(item) {
+  if (item.defaultDecision === 'environment_required') return 'This looks like missing local tooling, dependencies, services, or credentials.';
+  if (item.type === 'validation') return 'This command failed as a repository validation check and likely needs a repair or safer validation entrypoint.';
+  if (item.type === 'criterion') return 'This acceptance criterion is not proven by the current integrated result.';
+  if (item.type === 'finding') return 'A reviewer marked this as a blocking correctness or security finding.';
+  return HUMAN_REVIEW_DECISION_META[item.defaultDecision]?.description ?? 'This action is suggested from the quality gate.';
+}
+
+function renderReviewItem(item, index, total, theme = createCliTheme()) {
   const fields = [
-    `${index + 1}/${total}`,
-    item.id,
-    item.type,
+    theme.bold(`${index + 1}/${total}`),
+    theme.gray(item.id),
+    reviewTypeLabel(item, theme),
     item.status,
     item.severity ? `severity=${item.severity}` : null,
     item.role ? `role=${item.role}` : null,
-    item.defaultDecision ? `default=${item.defaultDecision}` : null,
   ].filter(Boolean).join(' ');
   const lines = [
     `[${fields}]`,
-    item.title,
+    theme.bold(item.title),
+    item.defaultDecision ? `Suggested action: ${decisionLabel(item.defaultDecision, theme)} - ${defaultActionReason(item)}` : null,
     item.summary ? `Summary: ${item.summary}` : null,
     item.command ? `Command: ${item.command}` : null,
     item.exitCode !== null && item.exitCode !== undefined ? `Exit: ${item.exitCode}` : null,
@@ -1832,33 +1931,40 @@ function normalizeHumanDecision(value, fallback) {
   return null;
 }
 
-async function promptHumanReviewDecisions(inbox, { inputStream = process.stdin, outputStream = process.stdout } = {}) {
+async function promptHumanReviewDecisions(inbox, { inputStream = process.stdin, outputStream = process.stdout, theme = createCliTheme(outputStream) } = {}) {
   const scriptedAnswers = inputStream.isTTY === true ? null : await readPipedAnswers(inputStream);
   const rl = scriptedAnswers ? null : createInterface({ input: inputStream, output: outputStream });
   const decisions = [];
   try {
     outputStream.write([
-      `Human review for run ${inbox.runId}`,
-      `Phase: ${inbox.phase}`,
-      `Items: ${inbox.counts.total} (${inbox.counts.validation} validation, ${inbox.counts.criteria} criteria, ${inbox.counts.findings} findings)`,
-      `Decisions: ${HUMAN_REVIEW_DECISION_VALUES.join(', ')}`,
-      'Press Enter to accept the default decision for an item.',
+      theme.bold('Human Review'),
+      `Run: ${inbox.runId}`,
+      `Phase: ${theme.yellow(inbox.phase)}`,
+      `Inbox: ${inbox.counts.total} item(s) - ${inbox.counts.validation} validation, ${inbox.counts.criteria} criteria, ${inbox.counts.findings} findings`,
+      '',
+      'Choose an action first. The note prompt comes after the action.',
+      'Press Enter at the action prompt to accept the suggested action for that item.',
+      'This command records review decisions only; it never resumes the run.',
+      '',
+      renderDecisionHelp(theme),
       '',
     ].join('\n'));
 
     for (let index = 0; index < inbox.items.length; index += 1) {
       const item = inbox.items[index];
-      outputStream.write(`${renderReviewItem(item, index, inbox.items.length)}\n`);
+      outputStream.write(`${renderReviewItem(item, index, inbox.items.length, theme)}\n`);
       let decision = null;
       while (!decision) {
         const answer = await reviewQuestion({
           rl,
           scriptedAnswers,
           outputStream,
-          prompt: `Decision [${HUMAN_REVIEW_DECISION_VALUES.join('/')}] default=${item.defaultDecision}: `,
+          prompt: `Action [r/e/m/a or full name] Enter=${item.defaultDecision}: `,
         });
         decision = normalizeHumanDecision(answer, item.defaultDecision);
-        if (!decision) outputStream.write(`Invalid decision. Use one of: ${HUMAN_REVIEW_DECISION_VALUES.join(', ')}.\n`);
+        if (!decision) {
+          outputStream.write(`${theme.red('Invalid action.')} Choose r, e, m, a, or a full action name. Notes are entered at the next prompt.\n`);
+        }
       }
       const note = redactText(await reviewQuestion({ rl, scriptedAnswers, outputStream, prompt: 'Note (optional): ' }), 2000).trim();
       decisions.push({
@@ -1900,6 +2006,7 @@ export async function reviewCommand(options, { inputStream = process.stdin, outp
   const state = await loadState(repo, runId);
   const background = await readBackgroundRecord(repo, runId);
   const inbox = await buildHumanReviewInbox(repo, state, { background });
+  const theme = createCliTheme(outputStream, options);
   if (options.json) {
     outputStream.write(`${JSON.stringify(inbox, null, 2)}\n`);
     return inbox;
@@ -1912,7 +2019,7 @@ export async function reviewCommand(options, { inputStream = process.stdin, outp
     return inbox;
   }
 
-  const decisions = await promptHumanReviewDecisions(inbox, { inputStream, outputStream });
+  const decisions = await promptHumanReviewDecisions(inbox, { inputStream, outputStream, theme });
   const session = {
     id: `HR-${snapshotStamp()}`,
     at: now(),
@@ -1935,21 +2042,21 @@ export async function reviewCommand(options, { inputStream = process.stdin, outp
   const hasManualItems = decisions.some((decision) => decision.decision === 'manual_required');
 
   const lines = [
-    `Human review saved for run ${runId}.`,
+    `${theme.green('Human review saved')} for run ${runId}.`,
     `Artifact: ${recorded.artifactPath}`,
     `Decisions: ${JSON.stringify(session.counts.byDecision)}`,
-    hasRepairRequests ? 'Repair requests will be included in the next repair-planning prompt.' : 'No repair requests were recorded for repair planning.',
-    hasEnvironmentItems ? 'Environment-required items should be resolved before resuming.' : null,
-    hasManualItems ? 'Manual-required items should be completed before resuming.' : null,
-    'Next resume command:',
+    hasRepairRequests ? `${theme.cyan('Repair requested:')} these items will be included in the next repair-planning prompt.` : `${theme.dim('No repair requests were recorded for repair planning.')}`,
+    hasEnvironmentItems ? `${theme.yellow('Environment required:')} resolve missing tools, dependencies, services, or credentials before resuming.` : null,
+    hasManualItems ? `${theme.magenta('Manual required:')} complete or verify manual work before resuming.` : null,
+    theme.bold('Next resume command:'),
     shellExample(resumeCommandForReview(runId, inbox.recommendedMaxRepairs)),
   ].filter(Boolean);
   if (dirty.length) {
     lines.push(
       '',
-      'Warning: repository has uncommitted changes outside delivery run artifacts; normal resume will refuse to start.',
+      theme.yellow('Warning: repository has uncommitted changes outside delivery run artifacts; normal resume will refuse to start.'),
       ...dirty.slice(0, 12).map((entry) => `  ${entry}`),
-      'Allow-dirty variant:',
+      theme.bold('Allow-dirty variant:'),
       shellExample(resumeCommandForReview(runId, inbox.recommendedMaxRepairs, true)),
     );
   }
@@ -2201,6 +2308,7 @@ Run/resume options:
   --json                With review, print the human review inbox without writing decisions
   --quiet               Suppress live progress output
   --verbose             Print additional sanitized progress details
+  --no-color            Disable colorized terminal output
   --raw                 Retain raw Codex JSONL in addition to sanitized events
   --allow-dirty         Allow starting from a dirty repository (not recommended)
   --keep-worktrees      Keep completed worker worktrees

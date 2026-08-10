@@ -178,6 +178,7 @@ assert.equal(jsonInbox.counts.total, 5);
 assert.equal(await exists(path.join(repo, '.codex', 'delivery-runs', runId, 'human-reviews.jsonl')), false);
 
 const input = [
+  'Install pytest before resume.',
   '',
   'Install pytest before resume.',
   '',
@@ -196,6 +197,9 @@ await reviewCommand({ repo, run: runId, _: [] }, {
   outputStream: reviewedOutput.stream,
 });
 assert.match(reviewedOutput.text(), /Human review saved/);
+assert.match(reviewedOutput.text(), /Actions/);
+assert.match(reviewedOutput.text(), /Invalid action/);
+assert.match(reviewedOutput.text(), /Notes are entered at the next prompt/);
 assert.match(reviewedOutput.text(), /resume --run review-smoke-run --max-repairs 3 --background/);
 const saved = JSON.parse(await readFile(runPaths(repo, runId).state, 'utf8'));
 assert.equal(saved.humanReviews.length, 1);

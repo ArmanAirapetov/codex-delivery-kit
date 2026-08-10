@@ -144,7 +144,7 @@ git cherry-pick <integration-commit>
 ./scripts/codex-delivery resume --run <run-id> --background
 ```
 
-`review` запускает guided terminal review только для `blocked`/`failed` runs. Он собирает failed validation commands, failed/unknown acceptance criteria и blocking reviewer/security findings, предлагает default decision (`repair_requested`, `environment_required`, `manual_required`, `acknowledged`) и сохраняет решения в `human-reviews.jsonl`, `artifacts/human-reviews/*.json`, `state.humanReviews` и `summary.md`. После записи команда печатает рекомендуемый `resume --max-repairs ... --background`; если рабочее дерево грязное, отдельно печатается вариант с `--allow-dirty`.
+`review` запускает guided terminal review только для `blocked`/`failed` runs. Он собирает failed validation commands, failed/unknown acceptance criteria и blocking reviewer/security findings, показывает action descriptions и shortcuts (`r/e/m/a`), предлагает suggested action (`repair_requested`, `environment_required`, `manual_required`, `acknowledged`) и сохраняет решения в `human-reviews.jsonl`, `artifacts/human-reviews/*.json`, `state.humanReviews` и `summary.md`. Сначала вводится action, затем note; если note случайно введён в action prompt, CLI объясняет ошибку и повторяет prompt. Interactive output colorized в TTY; `--no-color` или `NO_COLOR=1` отключают ANSI. После записи команда печатает рекомендуемый `resume --max-repairs ... --background`; если рабочее дерево грязное, отдельно печатается вариант с `--allow-dirty`.
 
 Resume сохраняет прежний terminal result в `state.resumes` и `artifacts/resume-*.json`, архивирует failed/running workstreams перед reset и продолжает DAG от текущего integration commit. Accepted/integrated workstreams не запускаются повторно.
 
