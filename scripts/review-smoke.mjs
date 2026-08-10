@@ -6,8 +6,10 @@ import path from 'node:path';
 import { Readable, Writable } from 'node:stream';
 import {
   buildHumanReviewInbox,
+  humanRepairContextForState,
   reportCommand,
   reviewCommand,
+  statusCommand,
 } from '../.codex/delivery-kit/cli.mjs';
 import {
   createInitialState,
@@ -242,6 +244,67 @@ assert.match(renderProgressLine(events.at(-1), { repo }), /\[human-review\] reco
 const reportOutput = outputCollector();
 await reportCommand({ repo, run: runId, _: [] }, { outputStream: reportOutput.stream });
 assert.equal(JSON.parse(reportOutput.text()).humanReviews.length, 1);
+const statusOutput = outputCollector();
+await statusCommand({ repo, run: runId, json: true, _: [] }, { outputStream: statusOutput.stream });
+const statusJson = JSON.parse(statusOutput.text());
+assert.equal(statusJson.runId, runId);
+assert.equal(statusJson.phase, 'blocked');
+assert.equal(statusJson.humanReviews.length, 1);
+assert.equal(statusJson.acceptanceCriteria.find((item) => item.id === 'AC-1').status, 'failed');
+
+const legacyRunId = 'review-legacy-run';
+const legacy = createInitialState({
+  runId: legacyRunId,
+  objective: 'Legacy review smoke',
+  repoRoot: repo,
+  baseRef: 'main',
+  baseCommit,
+});
+legacy.phase = 'blocked';
+legacy.integration = { ...state.integration };
+legacy.humanReviews = [{
+  id: 'HR-legacy',
+  at: now(),
+  runId: legacyRunId,
+  phase: 'blocked',
+  integrationCommit: baseCommit,
+  artifactPath: `.codex/delivery-runs/${legacyRunId}/artifacts/human-reviews/legacy.json`,
+  counts: { total: 1, byDecision: { environment_required: 1 } },
+  decisions: [{ itemId: 'VAL-pytest', type: 'validation', decision: 'environment_required', title: 'Validation failed: python -m pytest tests/contracts' }],
+  repairContext: null,
+}];
+await saveState(repo, legacy);
+await mkdir(path.join(repo, '.codex', 'delivery-runs', legacyRunId, 'artifacts', 'human-reviews'), { recursive: true });
+await writeFile(path.join(repo, '.codex', 'delivery-runs', legacyRunId, 'artifacts', 'human-reviews', 'legacy.json'), JSON.stringify({
+  id: 'HR-legacy',
+  at: now(),
+  runId: legacyRunId,
+  phase: 'blocked',
+  integrationCommit: baseCommit,
+  items: [{
+    id: 'VAL-pytest',
+    type: 'validation',
+    status: 'failed',
+    title: 'Validation failed: python -m pytest tests/contracts',
+    summary: 'exit=1 | log excerpt: No module named pytest',
+    defaultDecision: 'environment_required',
+    command: 'python -m pytest tests/contracts',
+    logExcerpt: 'No module named pytest',
+  }],
+  decisions: [{
+    itemId: 'VAL-pytest',
+    type: 'validation',
+    title: 'Validation failed: python -m pytest tests/contracts',
+    decision: 'environment_required',
+    defaultDecision: 'environment_required',
+    note: 'Approve Codex to fix requirements.',
+  }],
+  counts: { total: 1, byDecision: { environment_required: 1 } },
+}, null, 2), 'utf8');
+const legacyContext = await humanRepairContextForState(repo, legacy);
+assert.equal(legacyContext.repairRequests.length, 1);
+assert.equal(legacyContext.repairRequests[0].reroutedFromEnvironment, true);
+assert.equal(legacyContext.repairRequests[0].command, 'python -m pytest tests/contracts');
 
 const activeRunId = 'review-active-run';
 const active = createInitialState({

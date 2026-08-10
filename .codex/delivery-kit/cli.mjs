@@ -1441,15 +1441,29 @@ export async function buildHumanReviewInbox(repo, state, { includeLogExcerpts = 
   };
 }
 
-function buildHumanRepairContext(session) {
+function shouldTreatEnvironmentDecisionAsRepair(decision, item) {
+  if (decision.decision !== 'environment_required') return false;
+  if (decision.defaultDecision !== 'environment_required') return false;
+  if (item?.type !== 'validation') return false;
+  return projectDependencyFailure(item, item.logExcerpt ?? item.summary ?? '');
+}
+
+function buildHumanRepairContext(session, { includeProjectDependencyEnvironment = false } = {}) {
   const repairRequests = session.decisions
-    .filter((decision) => decision.decision === 'repair_requested')
     .map((decision) => {
       const item = session.items.find((candidate) => candidate.id === decision.itemId) ?? {};
+      const include = decision.decision === 'repair_requested'
+        || (includeProjectDependencyEnvironment && shouldTreatEnvironmentDecisionAsRepair(decision, item));
+      return include ? { decision, item } : null;
+    })
+    .filter(Boolean)
+    .map((decision) => {
+      const item = decision.item;
+      const record = decision.decision;
       return {
-        itemId: decision.itemId,
-        type: decision.type,
-        title: decision.title,
+        itemId: record.itemId,
+        type: record.type,
+        title: record.title,
         summary: item.summary ?? null,
         command: item.command ?? null,
         criterionId: item.criterionId ?? null,
@@ -1457,7 +1471,10 @@ function buildHumanRepairContext(session) {
         severity: item.severity ?? null,
         paths: item.paths ?? [],
         criterionIds: item.criterionIds ?? [],
-        note: decision.note || null,
+        note: record.note || null,
+        operatorDecision: record.decision,
+        defaultDecision: record.defaultDecision ?? null,
+        reroutedFromEnvironment: record.decision === 'environment_required',
       };
     });
   if (!repairRequests.length) return null;
@@ -1470,8 +1487,17 @@ function buildHumanRepairContext(session) {
   };
 }
 
-function latestHumanRepairContext(state) {
+async function readHumanReviewArtifact(repo, review) {
+  if (!review?.artifactPath) return null;
+  const artifactPath = path.isAbsolute(review.artifactPath) ? review.artifactPath : path.join(repo, review.artifactPath);
+  return readJsonIfExists(artifactPath);
+}
+
+export async function humanRepairContextForState(repo, state) {
   for (const review of [...(state.humanReviews ?? [])].reverse()) {
+    const full = await readHumanReviewArtifact(repo, review);
+    const rebuilt = full ? buildHumanRepairContext(full, { includeProjectDependencyEnvironment: true }) : null;
+    if (rebuilt?.repairRequests?.length) return rebuilt;
     if (review?.repairContext?.repairRequests?.length) return review.repairContext;
   }
   return null;
@@ -1545,7 +1571,7 @@ async function planRepair(repo, state, config, gate) {
       criteria: state.acceptanceCriteria,
       verification: { verdict: state.verification?.verdict, failedCriteria: gate.failedCriteria, failedCommands: gate.failedCommands },
       reviews: state.reviews,
-      humanReview: latestHumanRepairContext(state),
+      humanReview: await humanRepairContextForState(repo, state),
       iteration: state.repairIteration,
       maxParallel: config.maxParallel,
     }),
@@ -2079,13 +2105,72 @@ export async function reviewCommand(options, { inputStream = process.stdin, outp
   return session;
 }
 
-async function statusCommand(options) {
+function statusJsonPayload(repo, runId, state, background) {
+  const criteriaEvidence = new Map((state.verification?.criteria ?? []).map((item) => [item.id, item]));
+  const backgroundStale = backgroundIsStale(background);
+  return {
+    runId,
+    phase: state.phase,
+    objective: state.objective,
+    baseRef: state.baseRef,
+    baseCommit: state.baseCommit,
+    startedAt: state.startedAt,
+    finishedAt: state.finishedAt,
+    repairIteration: state.repairIteration,
+    maxRepairs: state.maxRepairs,
+    integration: state.integration,
+    acceptanceCriteria: (state.acceptanceCriteria ?? []).map((criterion) => {
+      const evidence = criteriaEvidence.get(criterion.id);
+      return {
+        ...criterion,
+        status: evidence?.status ?? 'unverified',
+        evidence: evidence?.evidence ?? [],
+        paths: evidence?.paths ?? [],
+        commands: evidence?.commands ?? [],
+      };
+    }),
+    workstreams: (state.workstreams ?? []).map((item) => ({
+      id: item.id,
+      title: item.title,
+      role: item.role,
+      kind: item.kind,
+      status: item.status,
+      repairIteration: item.repairIteration,
+      commit: item.commit,
+      changedPaths: item.changedPaths ?? [],
+      error: item.error ?? null,
+    })),
+    validation: state.validation,
+    verification: state.verification,
+    reviews: state.reviews,
+    humanReviews: state.humanReviews ?? [],
+    final: state.final,
+    background: background ? {
+      ...background,
+      effectiveStatus: backgroundStale ? 'stale' : background.status ?? 'unknown',
+      alive: background.pid ? processAlive(background.pid) : false,
+      backgroundLogPath: background.backgroundLogPath ? relativeToRepo(repo, background.backgroundLogPath) : null,
+    } : null,
+    paths: {
+      state: relativeToRepo(repo, runPaths(repo, runId).state),
+      events: relativeToRepo(repo, runPaths(repo, runId).events),
+      summary: relativeToRepo(repo, runPaths(repo, runId).summary),
+      final: relativeToRepo(repo, runPaths(repo, runId).final),
+    },
+  };
+}
+
+export async function statusCommand(options, { outputStream = process.stdout } = {}) {
   const repo = await repositoryRootFor(await repoCwdFromOptions(options));
   const runId = options.run || await latestRunId(repo);
   if (!runId) throw new Error('No delivery runs found.');
   const state = await loadState(repo, runId);
-  let output = `${await readFile(runPaths(repo, runId).summary, 'utf8')}\n`;
   const background = await readBackgroundRecord(repo, runId);
+  if (options.json) {
+    outputStream.write(`${JSON.stringify(statusJsonPayload(repo, runId, state, background), null, 2)}\n`);
+    return state;
+  }
+  let output = `${await readFile(runPaths(repo, runId).summary, 'utf8')}\n`;
   if (background) {
     const stale = backgroundIsStale(background);
     const stopped = ['stopped', 'stop_requested'].includes(background.status);
@@ -2106,7 +2191,7 @@ async function statusCommand(options) {
       '',
     ].filter((line) => line !== '').join('\n');
   }
-  process.stdout.write(output);
+  outputStream.write(output);
   return state;
 }
 
@@ -2305,7 +2390,7 @@ Usage:
   node .codex/delivery-kit/cli.mjs resume [--repo <path>] [--run <id>] [options]
   node .codex/delivery-kit/cli.mjs logs [--repo <path>] [--run <id>] [--follow] [--tail <n>] [--all] [--verbose]
   node .codex/delivery-kit/cli.mjs review [--repo <path>] [--run <id>] [--json]
-  node .codex/delivery-kit/cli.mjs status [--repo <path>] [--run <id>]
+  node .codex/delivery-kit/cli.mjs status [--repo <path>] [--run <id>] [--json]
   node .codex/delivery-kit/cli.mjs report [--repo <path>] [--run <id>]
   node .codex/delivery-kit/cli.mjs stop [--repo <path>] [--run <id>]
   node .codex/delivery-kit/cli.mjs cleanup [--repo <path>] [--run <id>] [--integration] [--logs]
@@ -2320,7 +2405,7 @@ Run/resume options:
   --background          Start run/resume in a detached background process
   --tail <n>            Show only the last n event records before exiting or following
   --all                 With logs --follow, print full history before following
-  --json                With review, print the human review inbox without writing decisions
+  --json                Print machine-readable output for review/status
   --quiet               Suppress live progress output
   --verbose             Print additional sanitized progress details
   --no-color            Disable colorized terminal output

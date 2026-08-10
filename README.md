@@ -141,6 +141,7 @@ Strict harness стартует только из чистого Git состо�
 ./scripts/codex-delivery review --run <run-id>
 ./scripts/codex-delivery review --run <run-id> --json
 ./scripts/codex-delivery status
+./scripts/codex-delivery status --json
 ./scripts/codex-delivery report
 ./scripts/codex-delivery stop --run <run-id>
 ./scripts/codex-delivery cleanup --integration
