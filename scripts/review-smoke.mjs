@@ -74,7 +74,7 @@ state.integration = {
   attempts: [],
 };
 state.validation = {
-  commands: ['python -m pytest tests/contracts', 'docker compose up --build'],
+  commands: ['python -m pytest tests/contracts', 'npm --prefix web run build', 'node --version', 'docker compose up --build'],
   runs: [
     {
       command: 'python -m pytest tests/contracts',
@@ -84,11 +84,25 @@ state.validation = {
       logPath: `.codex/delivery-runs/${runId}/commands/validation-01.log`,
     },
     {
+      command: 'npm --prefix web run build',
+      ok: false,
+      exitCode: 127,
+      durationMs: 52,
+      logPath: `.codex/delivery-runs/${runId}/commands/validation-02.log`,
+    },
+    {
+      command: 'node --version',
+      ok: false,
+      exitCode: 127,
+      durationMs: 0,
+      logPath: `.codex/delivery-runs/${runId}/commands/validation-03.log`,
+    },
+    {
       command: 'docker compose up --build',
       ok: false,
       exitCode: null,
       durationMs: 0,
-      logPath: `.codex/delivery-runs/${runId}/commands/validation-02.log`,
+      logPath: `.codex/delivery-runs/${runId}/commands/validation-04.log`,
       error: 'Command rejected by validation allowlist.',
     },
   ],
@@ -146,15 +160,19 @@ await mkdir(path.join(repo, '.codex', 'delivery-runs'), { recursive: true });
 await mkdir(path.join(repo, '.codex', 'delivery-runs', runId, 'commands'), { recursive: true });
 await writeFile(path.join(repo, '.codex', 'delivery-runs', 'latest'), `${runId}\n`, 'utf8');
 await writeFile(path.join(repo, '.codex', 'delivery-runs', runId, 'commands', 'validation-01.log'), 'No module named pytest\n', 'utf8');
-await writeFile(path.join(repo, '.codex', 'delivery-runs', runId, 'commands', 'validation-02.log'), 'Command rejected by validation allowlist.\n', 'utf8');
+await writeFile(path.join(repo, '.codex', 'delivery-runs', runId, 'commands', 'validation-02.log'), 'sh: 1: tsc: not found\n', 'utf8');
+await writeFile(path.join(repo, '.codex', 'delivery-runs', runId, 'commands', 'validation-03.log'), 'node: command not found\n', 'utf8');
+await writeFile(path.join(repo, '.codex', 'delivery-runs', runId, 'commands', 'validation-04.log'), 'Command rejected by validation allowlist.\n', 'utf8');
 await saveState(repo, state);
 
 const inbox = await buildHumanReviewInbox(repo, state);
-assert.equal(inbox.counts.total, 5);
-assert.equal(inbox.counts.validation, 2);
+assert.equal(inbox.counts.total, 7);
+assert.equal(inbox.counts.validation, 4);
 assert.equal(inbox.counts.criteria, 2);
 assert.equal(inbox.counts.findings, 1);
-assert.equal(inbox.items.find((item) => item.command === 'python -m pytest tests/contracts').defaultDecision, 'environment_required');
+assert.equal(inbox.items.find((item) => item.command === 'python -m pytest tests/contracts').defaultDecision, 'repair_requested');
+assert.equal(inbox.items.find((item) => item.command === 'npm --prefix web run build').defaultDecision, 'repair_requested');
+assert.equal(inbox.items.find((item) => item.command === 'node --version').defaultDecision, 'environment_required');
 assert.equal(inbox.items.find((item) => item.command === 'docker compose up --build').defaultDecision, 'repair_requested');
 assert.deepEqual(inbox.items.filter((item) => item.type === 'criterion').map((item) => item.id), ['AC-1', 'AC-2']);
 assert.ok(inbox.items.some((item) => /^F-reviewer-[a-f0-9]+$/.test(item.id)));
@@ -174,13 +192,17 @@ assert.match(prompt, /Focus on backend marker/);
 const jsonOutput = outputCollector();
 await reviewCommand({ repo, run: runId, json: true, _: [] }, { outputStream: jsonOutput.stream });
 const jsonInbox = JSON.parse(jsonOutput.text());
-assert.equal(jsonInbox.counts.total, 5);
+assert.equal(jsonInbox.counts.total, 7);
 assert.equal(await exists(path.join(repo, '.codex', 'delivery-runs', runId, 'human-reviews.jsonl')), false);
 
 const input = [
   'Install pytest before resume.',
   '',
   'Install pytest before resume.',
+  '',
+  'Add frontend dev dependencies.',
+  '',
+  'Install Node locally.',
   '',
   'Allow docker compose config only.',
   'manual_required',
@@ -203,11 +225,11 @@ assert.match(reviewedOutput.text(), /Notes are entered at the next prompt/);
 assert.match(reviewedOutput.text(), /resume --run review-smoke-run --max-repairs 3 --background/);
 const saved = JSON.parse(await readFile(runPaths(repo, runId).state, 'utf8'));
 assert.equal(saved.humanReviews.length, 1);
-assert.equal(saved.humanReviews[0].counts.byDecision.repair_requested, 2);
+assert.equal(saved.humanReviews[0].counts.byDecision.repair_requested, 4);
 assert.equal(saved.humanReviews[0].counts.byDecision.environment_required, 1);
 assert.equal(saved.humanReviews[0].counts.byDecision.manual_required, 1);
 assert.equal(saved.humanReviews[0].counts.byDecision.acknowledged, 1);
-assert.equal(saved.humanReviews[0].repairContext.repairRequests.length, 2);
+assert.equal(saved.humanReviews[0].repairContext.repairRequests.length, 4);
 assert.ok(saved.humanReviews[0].repairContext.repairRequests.some((item) => item.note === 'Allow docker compose config only.'));
 assert.ok(await exists(path.join(repo, '.codex', 'delivery-runs', runId, 'human-reviews.jsonl')));
 assert.ok(await exists(path.join(repo, saved.humanReviews[0].artifactPath)));

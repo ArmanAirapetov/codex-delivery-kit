@@ -102,14 +102,14 @@ const HUMAN_REVIEW_DECISION_SHORTCUTS = new Map([
 const HUMAN_REVIEW_DECISION_META = {
   repair_requested: {
     shortcut: 'r',
-    label: 'Repair with Codex',
-    description: 'Ask the next resume repair plan to address this item.',
+    label: 'Approve Codex repair',
+    description: 'Let the next resume repair plan fix code, config, requirements, or package manifests.',
     color: 'cyan',
   },
   environment_required: {
     shortcut: 'e',
-    label: 'Fix environment',
-    description: 'Resolve missing local tools, dependencies, services, or credentials before resume.',
+    label: 'Fix locally first',
+    description: 'Use only for missing system tools, services, credentials, or setup Codex cannot change in the repo.',
     color: 'yellow',
   },
   manual_required: {
@@ -1260,20 +1260,34 @@ async function readLogExcerpt(repo, run, max = 2400) {
   }
 }
 
-function missingToolFailure(run, logText = '') {
+function projectDependencyFailure(run, logText = '') {
   const text = `${run?.error ?? ''}\n${logText ?? ''}`;
   const command = normalizedCommand(run?.command);
-  if (Number(run?.exitCode) === 127) return true;
-  if (/(?:command not found|executable not found|ENOENT|No module named|Cannot find module|(?:^|\s)(?:sh|bash): .*not found)/i.test(text)) return true;
   if (/^python(?:3)? -m pytest(?:\s|$)/.test(command) && /pytest/i.test(text) && /(?:not installed|not available|not found|No module named)/i.test(text)) return true;
-  if (/^npm(?:\s|$)|^npm --prefix /.test(command) && /(?:npm: command not found|sh: .*npm.*not found|Cannot find module)/i.test(text)) return true;
-  if (/^docker compose(?:\s|$)|^docker-compose(?:\s|$)/.test(command) && /(?:docker: command not found|docker-compose: command not found|Cannot connect to the Docker daemon)/i.test(text)) return true;
+  if (/^python(?:3)? -m pytest(?:\s|$)/.test(command) && /No module named [A-Za-z0-9_.-]+/i.test(text)) return true;
+  if (/^npm --prefix \S+ run /.test(command) && /(?:sh: \d+: (?:tsc|vite|vitest|eslint|prettier|webpack|rollup): not found|Cannot find module)/i.test(text)) return true;
+  return false;
+}
+
+function localEnvironmentFailure(run, logText = '') {
+  const text = `${run?.error ?? ''}\n${logText ?? ''}`;
+  const command = normalizedCommand(run?.command);
+  if (/(?:^|\s)(?:node|npm|pnpm|yarn|bun|python|python3|docker|docker-compose): command not found/i.test(text)) return true;
+  if (/(?:executable not found|ENOENT)/i.test(text)) return true;
+  if (/^docker compose(?:\s|$)|^docker-compose(?:\s|$)/.test(command)) {
+    return /(?:docker: command not found|docker-compose: command not found|Cannot connect to the Docker daemon|Docker daemon)/i.test(text);
+  }
+  if (Number(run?.exitCode) === 127) {
+    if (/^npm(?:\s|$)/.test(command) && /npm: not found|npm: command not found/i.test(text)) return true;
+    if (/^python(?:3)?(?:\s|$)/.test(command) && /python(?:3)?: not found|python(?:3)?: command not found/i.test(text)) return true;
+  }
   return false;
 }
 
 function defaultDecisionForValidation(run, logText = '') {
   if (/allowlist/i.test(String(run?.error ?? ''))) return 'repair_requested';
-  if (missingToolFailure(run, logText)) return 'environment_required';
+  if (projectDependencyFailure(run, logText)) return 'repair_requested';
+  if (localEnvironmentFailure(run, logText)) return 'environment_required';
   return 'repair_requested';
 }
 
@@ -1891,7 +1905,8 @@ function reviewTypeLabel(item, theme) {
 }
 
 function defaultActionReason(item) {
-  if (item.defaultDecision === 'environment_required') return 'This looks like missing local tooling, dependencies, services, or credentials.';
+  if (item.defaultDecision === 'environment_required') return 'This looks like missing system tooling, services, credentials, or local setup outside the repo.';
+  if (item.type === 'validation' && projectDependencyFailure(item, item.logExcerpt ?? '')) return 'This looks like a missing project dependency; Codex can update requirements or package manifests.';
   if (item.type === 'validation') return 'This command failed as a repository validation check and likely needs a repair or safer validation entrypoint.';
   if (item.type === 'criterion') return 'This acceptance criterion is not proven by the current integrated result.';
   if (item.type === 'finding') return 'A reviewer marked this as a blocking correctness or security finding.';
