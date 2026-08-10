@@ -5,6 +5,7 @@
   "timeoutMinutes": 60,
   "retainRawEvents": false,
   "keepWorkerWorktrees": false,
+  "autoInstallProjectDependencies": true,
   "allowDirty": false,
   "model": null,
   "models": {

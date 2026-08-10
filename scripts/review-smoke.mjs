@@ -5,7 +5,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { Readable, Writable } from 'node:stream';
 import {
+  buildProjectDependencySetupPlan,
   buildHumanReviewInbox,
+  dependencySetupDeferredWorkstream,
   humanRepairContextForState,
   reportCommand,
   reviewCommand,
@@ -46,7 +48,28 @@ function outputCollector() {
 }
 
 await mkdir(path.join(repo, 'src'), { recursive: true });
+await mkdir(path.join(repo, 'web'), { recursive: true });
 await writeFile(path.join(repo, 'src', 'a.txt'), 'initial\n');
+await writeFile(path.join(repo, 'requirements-dev.txt'), 'pytest==8.0.0\n', 'utf8');
+await writeFile(path.join(repo, 'web', 'package.json'), JSON.stringify({
+  name: 'review-smoke-web',
+  version: '0.0.0',
+  scripts: { build: 'tsc -b' },
+  devDependencies: { typescript: '^5.0.0' },
+}, null, 2), 'utf8');
+await writeFile(path.join(repo, 'web', 'package-lock.json'), JSON.stringify({
+  name: 'review-smoke-web',
+  version: '0.0.0',
+  lockfileVersion: 3,
+  requires: true,
+  packages: {
+    '': {
+      name: 'review-smoke-web',
+      version: '0.0.0',
+      devDependencies: { typescript: '^5.0.0' },
+    },
+  },
+}, null, 2), 'utf8');
 await git(repo, ['init', '-b', 'main']);
 await git(repo, ['config', 'user.email', 'review-smoke@example.com']);
 await git(repo, ['config', 'user.name', 'Review Smoke']);
@@ -179,6 +202,39 @@ assert.equal(inbox.items.find((item) => item.command === 'docker compose up --bu
 assert.deepEqual(inbox.items.filter((item) => item.type === 'criterion').map((item) => item.id), ['AC-1', 'AC-2']);
 assert.ok(inbox.items.some((item) => /^F-reviewer-[a-f0-9]+$/.test(item.id)));
 
+const setupPlan = await buildProjectDependencySetupPlan(repo, state);
+assert.deepEqual(setupPlan.steps.map((step) => step.kind), ['python-venv', 'python-install', 'npm-install']);
+assert.match(setupPlan.steps[1].command, /pip install -r requirements-dev\.txt/);
+assert.equal(setupPlan.steps[2].command, 'npm --prefix web ci');
+assert.ok(setupPlan.env.PATH.includes(path.join(runPaths(repo, runId).artifacts, 'validation-env', 'python')));
+assert.equal(dependencySetupDeferredWorkstream(
+  { repairIteration: 1 },
+  {
+    status: 'blocked',
+    results: [{ kind: 'evidence', title: 'safe checks passed' }],
+    checks: [
+      {
+        command: 'node scripts/validate-product.mjs',
+        status: 'failed',
+        summary: 'Failed closed because required dependency-backed gates were NOT RUN: pytest missing, tsc: not found, vitest: not found.',
+      },
+      {
+        command: 'npm --prefix web run build',
+        status: 'not_run',
+        summary: 'tsc: not found',
+      },
+    ],
+  },
+), true);
+assert.equal(dependencySetupDeferredWorkstream(
+  { repairIteration: 1 },
+  {
+    status: 'blocked',
+    results: [{ kind: 'evidence', title: 'real failure' }],
+    checks: [{ command: 'node scripts/validate-product.mjs', status: 'failed', summary: 'Static product smoke failed because expected route is missing.' }],
+  },
+), false);
+
 const prompt = repairPlanPrompt({
   objective: 'Review smoke blocked delivery',
   criteria: state.acceptanceCriteria,
@@ -224,6 +280,7 @@ assert.match(reviewedOutput.text(), /Human review saved/);
 assert.match(reviewedOutput.text(), /Actions/);
 assert.match(reviewedOutput.text(), /Invalid action/);
 assert.match(reviewedOutput.text(), /Notes are entered at the next prompt/);
+assert.match(reviewedOutput.text(), /Project dependencies:/);
 assert.match(reviewedOutput.text(), /resume --run review-smoke-run --max-repairs 3 --background/);
 const saved = JSON.parse(await readFile(runPaths(repo, runId).state, 'utf8'));
 assert.equal(saved.humanReviews.length, 1);

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
-import { chmod, cp, mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
+import { chmod, cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -12,7 +12,7 @@ import {
   renderActiveDeliveryWarning,
   safeValidationCommand,
 } from '../.codex/delivery-kit/cli.mjs';
-import { git, runProcess } from '../.codex/delivery-kit/lib/git.mjs';
+import { createWorktree, git, removeWorktree, runProcess } from '../.codex/delivery-kit/lib/git.mjs';
 import { renderProgressLine } from '../.codex/delivery-kit/lib/progress.mjs';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -39,6 +39,24 @@ await git(repo, ['config', 'user.email', 'smoke@example.com']);
 await git(repo, ['config', 'user.name', 'Smoke Test']);
 await git(repo, ['add', '--all']);
 await git(repo, ['commit', '-m', 'initial']);
+
+const staleWorktree = await createWorktree({
+  repo,
+  runId: 'stale-inspection-run',
+  id: 'verification-1',
+  baseCommit: 'HEAD',
+  branchPrefix: 'codex-delivery-inspection',
+});
+await rm(staleWorktree.worktreePath, { recursive: true, force: true });
+const recreatedWorktree = await createWorktree({
+  repo,
+  runId: 'stale-inspection-run',
+  id: 'verification-1',
+  baseCommit: 'HEAD',
+  branchPrefix: 'codex-delivery-inspection',
+});
+assert.equal(recreatedWorktree.branch, staleWorktree.branch);
+await removeWorktree(repo, recreatedWorktree.worktreePath, recreatedWorktree.branch);
 
 const fakeCodex = path.join(fakeBin, 'codex');
 await writeFile(fakeCodex, `#!/usr/bin/env python3
@@ -168,6 +186,20 @@ assert.match(renderProgressLine({
   iteration: 3,
   addedDependencies: [{ workstreamId: 'R3-b', dependsOn: 'R3-a' }],
 }), /\[repair\] iteration=3 normalized dependencies=1/);
+assert.match(renderProgressLine({
+  type: 'validation.setup.plan',
+  steps: 2,
+  reason: 'human review HR-smoke approved project dependency repair',
+}), /\[validation-setup\] enabled steps=2/);
+assert.match(renderProgressLine({
+  type: 'validation.setup.cleaned',
+  paths: ['web/node_modules'],
+}), /\[validation-setup\] cleaned generated deps=web\/node_modules/);
+assert.match(renderProgressLine({
+  type: 'workstream.dependency-setup.deferred',
+  workstreamId: 'R1-validation',
+  checks: ['node scripts/validate-product.mjs'],
+}), /\[workstream\] R1-validation deferred dependency setup/);
 assert.equal(safeValidationCommand('python -m compileall backend worker-agent mcp-server', DEFAULT_CONFIG), true);
 assert.equal(safeValidationCommand('python3 -m compileall backend worker-agent mcp-server', DEFAULT_CONFIG), true);
 assert.equal(safeValidationCommand('npm --prefix web run build', DEFAULT_CONFIG), true);

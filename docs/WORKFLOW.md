@@ -90,10 +90,11 @@ cat .codex/delivery-runs/latest
 6. Out-of-scope diff отклоняется.
 7. Failed worker checks блокируют workstream только когда они отражают реальный product/test failure. Strict-only delivery helper failures, dependency installation attempts and declared checks that cannot run because the tool is unavailable are logged as non-blocking worker evidence.
 8. Accepted commits интегрируются последовательно.
-9. Validation commands выполняются harness.
-10. Verifier доказывает каждый criterion.
-11. Reviewer и security запускаются параллельно.
-12. При failure создаётся bounded repair DAG. Strict harness agents return schema JSON directly and should not call interactive `delivery_*` MCP tools; the harness records their output and state transitions.
+9. If human review approved repair for missing project dependencies, harness prepares checked-in Python/npm dependencies in the integration worktree before validation.
+10. Validation commands выполняются harness.
+11. Verifier доказывает каждый criterion.
+12. Reviewer и security запускаются параллельно.
+13. При failure создаётся bounded repair DAG. Strict harness agents return schema JSON directly and should not call interactive `delivery_*` MCP tools; the harness records their output and state transitions.
 
 ## 6. Результат accepted run
 
@@ -145,7 +146,7 @@ git cherry-pick <integration-commit>
 ./scripts/codex-delivery resume --run <run-id> --background
 ```
 
-`review` запускает guided terminal review только для `blocked`/`failed` runs. Он собирает failed validation commands, failed/unknown acceptance criteria и blocking reviewer/security findings, показывает action descriptions и shortcuts (`r/e/m/a`), предлагает suggested action (`repair_requested`, `environment_required`, `manual_required`, `acknowledged`) и сохраняет решения в `human-reviews.jsonl`, `artifacts/human-reviews/*.json`, `state.humanReviews` и `summary.md`. Missing project dependencies such as `pytest`, `tsc`, Vite or Vitest default to `repair_requested`, so pressing Enter approves Codex to fix requirements/package manifests. Missing system tools, services or credentials still default to `environment_required`. Сначала вводится action, затем note; если note случайно введён в action prompt, CLI объясняет ошибку и повторяет prompt. Interactive output colorized в TTY; `--no-color` или `NO_COLOR=1` отключают ANSI. После записи команда печатает рекомендуемый `resume --max-repairs ... --background`; если рабочее дерево грязное, отдельно печатается вариант с `--allow-dirty`.
+`review` запускает guided terminal review только для `blocked`/`failed` runs. Он собирает failed validation commands, failed/unknown acceptance criteria и blocking reviewer/security findings, показывает action descriptions и shortcuts (`r/e/m/a`), предлагает suggested action (`repair_requested`, `environment_required`, `manual_required`, `acknowledged`) и сохраняет решения в `human-reviews.jsonl`, `artifacts/human-reviews/*.json`, `state.humanReviews` и `summary.md`. Missing project dependencies such as `pytest`, `tsc`, Vite or Vitest default to `repair_requested`, so pressing Enter approves Codex to fix requirements/package manifests and lets resume prepare checked-in dependencies before validation. Missing system tools, services or credentials still default to `environment_required`. Сначала вводится action, затем note; если note случайно введён в action prompt, CLI объясняет ошибку и повторяет prompt. Interactive output colorized в TTY; `--no-color` или `NO_COLOR=1` отключают ANSI. После записи команда печатает рекомендуемый `resume --max-repairs ... --background`; если рабочее дерево грязное, отдельно печатается вариант с `--allow-dirty`.
 
 Resume сохраняет прежний terminal result в `state.resumes` и `artifacts/resume-*.json`, архивирует failed/running workstreams перед reset и продолжает DAG от текущего integration commit. Accepted/integrated workstreams не запускаются повторно.
 

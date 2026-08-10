@@ -69,6 +69,7 @@ Hard boundaries:
 - Inspect existing conventions before editing.
 - Run all applicable localValidationCommands. Add focused tests when needed.
 - Do not run package/dependency installation commands as validation checks.
+- If the workstream repairs project dependencies, edit checked-in manifests, lockfiles, test config, or validation scripts as needed. The harness may perform dependency setup later in the integration worktree; do not commit installed dependency directories.
 - If a required validation tool is unavailable, record that command as status "not_run" with the exact reason, run the best safe fallback check, and list the gap in residualRisks. Use status "failed" only when a check actually ran and proves the product/workstream is wrong.
 - Strict harness mode records your returned JSON automatically. Do not call interactive workflow tools such as delivery_status, delivery_record_result, delivery_complete_workstream, or delivery_accept.
 - Do not commit; the harness validates scope and commits after your turn.
@@ -148,5 +149,5 @@ ${humanReview?.repairRequests?.length ? `\nHuman review repair requests:\n${json
 
 Strict harness mode records your returned JSON automatically. Do not call interactive workflow tools such as delivery_status, delivery_record_result, delivery_complete_workstream, or delivery_accept.
 
-Create the smallest repair DAG that addresses every failed criterion and every critical/high/medium finding. Workstream IDs must start with R${iteration}-. Use human review repair requests as prioritization and additional operator context only; they do not waive any quality gate requirement. Use only scopes justified by concrete failed evidence. Potentially overlapping scopes must be dependency-ordered. Keep at most ${maxParallel} workstreams ready at once. Do not include already proven or unrelated improvements. Return only the JSON object required by the output schema.`;
+Create the smallest repair DAG that addresses every failed criterion and every critical/high/medium finding. Workstream IDs must start with R${iteration}-. Use human review repair requests as prioritization and additional operator context only; they do not waive any quality gate requirement. For human-approved project dependency failures, plan repository repairs to manifests, lockfiles, test configuration, or validation scripts; the harness may perform dependency setup before integration validation. Do not create a required workstream whose only purpose is to re-run validation with no possible repository change. Use only scopes justified by concrete failed evidence. Potentially overlapping scopes must be dependency-ordered. Keep at most ${maxParallel} workstreams ready at once. Do not include already proven or unrelated improvements. Return only the JSON object required by the output schema.`;
 }

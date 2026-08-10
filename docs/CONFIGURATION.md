@@ -75,6 +75,21 @@ Timeout одного Codex role turn и validation command.
 
 По умолчанию accepted writer branch/worktree удаляется после cherry-pick. Commit остаётся в integration history. Включите для debugging.
 
+### autoInstallProjectDependencies
+
+Default: `true`.
+
+Работает только после human review, когда failed validation command с missing project dependencies (`pytest`, `tsc`, Vite/Vitest и похожие manifest-backed tools) записан как `repair_requested`. При следующем `resume` harness перед validation делает ограниченный setup в integration worktree:
+
+- Python: создаёт run-local virtualenv в `.codex/delivery-runs/<run-id>/artifacts/validation-env/python` и устанавливает checked-in `requirements-dev.txt`/`requirements.txt`;
+- npm: перед broad validation удаляет stale generated `<dir>/node_modules` в integration worktree, а для validation commands вида `npm --prefix <dir> run ...` запускает `npm --prefix <dir> ci`, если есть `package-lock.json`, иначе `npm --prefix <dir> install --no-package-lock`.
+
+Команды setup пишутся в `commands/validation-setup-*.log` и `status --json` в `validation.setupRuns`. Global install, `sudo`, произвольный shell и system services не используются. Отключить можно в config или одноразово:
+
+```bash
+./scripts/codex-delivery resume --run <run-id> --no-auto-install-deps
+```
+
 ### model и models
 
 `model` — общий override. `models` — override по role.

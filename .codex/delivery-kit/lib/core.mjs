@@ -461,6 +461,15 @@ export function renderSummary(state) {
   for (const item of state.workstreams) {
     lines.push(`- **${item.id}** [${item.status}] ${item.title} — role=${item.role}; scope=${item.scope.join(', ')}`);
   }
+  if (state.validation?.setup?.enabled || (state.validation?.setupRuns ?? []).length) {
+    lines.push('', '## Validation setup', '');
+    if (state.validation?.setup?.reason) lines.push(`- **Reason:** ${state.validation.setup.reason}`);
+    if ((state.validation?.setupRuns ?? []).length === 0) lines.push('_No setup commands recorded._');
+    for (const run of state.validation.setupRuns ?? []) {
+      const status = run.skipped ? 'skipped' : run.ok ? 'passed' : 'failed';
+      lines.push(`- [${status}] \`${run.command}\` (${run.durationMs} ms)`);
+    }
+  }
   lines.push('', '## Validation', '');
   if (state.validation.runs.length === 0) lines.push('_No commands recorded._');
   for (const run of state.validation.runs) {

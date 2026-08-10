@@ -92,7 +92,9 @@ export async function createWorktree({ repo, runId, id, baseCommit, branchPrefix
   const safeId = slugify(id, 50);
   const worktreePath = path.join(root, safeId);
   const branch = `${branchPrefix}/${slugify(runId, 56)}/${safeId}`;
+  await git(repo, ['worktree', 'remove', '--force', worktreePath], { rejectOnError: false, timeoutMs: 120000 });
   await rm(worktreePath, { recursive: true, force: true });
+  await git(repo, ['worktree', 'prune'], { rejectOnError: false, timeoutMs: 120000 });
   await git(repo, ['branch', '-D', branch], { rejectOnError: false });
   await git(repo, ['worktree', 'add', '-b', branch, worktreePath, baseCommit]);
   return { branch, worktreePath };

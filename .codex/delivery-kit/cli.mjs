@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
-import { open, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { lstat, open, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { createInterface } from 'node:readline/promises';
@@ -17,6 +17,7 @@ import {
   loadState,
   newRunId,
   now,
+  normalizeRelative,
   readJson,
   readyWorkstreams,
   redactText,
@@ -74,6 +75,7 @@ const BOOLEAN_OPTIONS = new Set([
   'keepWorktrees',
   'logs',
   'noColor',
+  'noAutoInstallDeps',
   'quiet',
   'raw',
   'verbose',
@@ -103,7 +105,7 @@ const HUMAN_REVIEW_DECISION_META = {
   repair_requested: {
     shortcut: 'r',
     label: 'Approve Codex repair',
-    description: 'Let the next resume repair plan fix code, config, requirements, or package manifests.',
+    description: 'Let resume fix code/config/manifests and prepare project deps needed for validation.',
     color: 'cyan',
   },
   environment_required: {
@@ -133,6 +135,7 @@ export const DEFAULT_CONFIG = {
   timeoutMinutes: 60,
   retainRawEvents: false,
   keepWorkerWorktrees: false,
+  autoInstallProjectDependencies: true,
   allowDirty: false,
   model: null,
   reasoning: {
@@ -342,6 +345,7 @@ async function loadConfig(repo, options) {
   if (options.raw) config.retainRawEvents = true;
   if (options.allowDirty) config.allowDirty = true;
   if (options.keepWorktrees) config.keepWorkerWorktrees = true;
+  if (options.noAutoInstallDeps) config.autoInstallProjectDependencies = false;
   if (options.model) config.model = options.model;
   return config;
 }
@@ -828,7 +832,29 @@ function isToolUnavailableFailure(check) {
   if (/^python(?:3)? -m pytest(?:\s|$)/.test(command)) {
     return /No module named pytest|pytest[^.]*not installed|pytest[^.]*unavailable|pytest[^.]*not found/i.test(summary);
   }
+  if (/^npm --prefix \S+ run(?:\s|$)/.test(command)) {
+    return /(?:tsc|vite|vitest|eslint|prettier|webpack|rollup): not found|Cannot find module/i.test(summary);
+  }
+  if (/^node\s+.*validate.*\.mjs(?:\s|$)/.test(command)) {
+    return /(?:NOT RUN|No module named|dependency-backed|frontend dependencies|web\/node_modules|tsc: not found|vite: not found|vitest: not found|pytest)/i.test(summary);
+  }
   return /command not found|executable not found|tool(?:ing)? unavailable|dependency unavailable/i.test(summary);
+}
+
+function isProjectDependencyBlockedCheck(check) {
+  const summary = String(check?.summary ?? '');
+  if (isToolUnavailableFailure(check)) return true;
+  return projectDependencyFailure({ command: check?.command, error: summary }, summary);
+}
+
+export function dependencySetupDeferredWorkstream(workstream, final) {
+  if ((workstream.repairIteration ?? 0) <= 0) return false;
+  if (final?.status !== 'blocked') return false;
+  if ((final?.results?.length ?? 0) === 0) return false;
+  const checks = final?.checks ?? [];
+  const incomplete = checks.filter((check) => ['failed', 'not_run'].includes(check?.status));
+  if (!incomplete.length) return false;
+  return incomplete.every(isProjectDependencyBlockedCheck);
 }
 
 function isNonBlockingWorkerFailedCheck(workstream, check) {
@@ -900,7 +926,9 @@ async function executeWorker(repo, state, config, workstream, baseCommit, repair
     });
   }
   const hasEvidence = (run.final?.results?.length ?? 0) > 0 && (run.final?.checks?.length ?? 0) > 0;
-  const completed = run.ok && run.final.status === 'completed' && forbidden.length === 0 && blockingFailedChecks.length === 0 && hasEvidence;
+  const deferredDependencySetup = run.ok && forbidden.length === 0 && dependencySetupDeferredWorkstream(workstream, run.final);
+  const completed = (run.ok && run.final.status === 'completed' && forbidden.length === 0 && blockingFailedChecks.length === 0 && hasEvidence)
+    || deferredDependencySetup;
   if (!completed) {
     workstream.status = 'failed';
     workstream.finishedAt = now();
@@ -926,7 +954,7 @@ async function executeWorker(repo, state, config, workstream, baseCommit, repair
     throw new Error(`Workstream '${workstream.id}' failed: ${workstream.error}`);
   }
   const commit = await commitAll(created.worktreePath, `codex-delivery(${workstream.id}): ${workstream.title}`);
-  if (!commit && workstream.required) {
+  if (!commit && workstream.required && !deferredDependencySetup) {
     workstream.status = 'failed';
     workstream.finishedAt = now();
     workstream.error = 'Required workstream produced no repository change.';
@@ -958,6 +986,15 @@ async function executeWorker(repo, state, config, workstream, baseCommit, repair
   });
   const snapshot = await recordWorktreeSnapshot(repo, state, workstream, 'completed', run);
   if (snapshot) attempt.snapshotPath = snapshot.path;
+  if (deferredDependencySetup) {
+    await appendEvent(repo, state, {
+      type: 'workstream.dependency-setup.deferred',
+      workstreamId: workstream.id,
+      checks: (run.final?.checks ?? [])
+        .filter((check) => ['failed', 'not_run'].includes(check?.status))
+        .map((check) => check.command),
+    });
+  }
   for (const result of run.final.results) {
     await appendResult(repo, state, { ...result, workstreamId: workstream.id, role: workstream.role });
   }
@@ -1090,8 +1127,11 @@ export function safeValidationCommand(command, config) {
 
 async function runValidation(repo, state, config) {
   state.validation.runs = [];
+  const setup = await prepareProjectDependencySetup(repo, state, config);
+  await setup.runInitial();
   for (let index = 0; index < state.validation.commands.length; index += 1) {
     const command = state.validation.commands[index];
+    await setup.runBeforeCommand(command);
     const logPath = path.join(runPaths(repo, state.runId).commands, `validation-${String(index + 1).padStart(2, '0')}.log`);
     await appendEvent(repo, state, { type: 'validation.started', command, index: index + 1, total: state.validation.commands.length, logPath: path.relative(repo, logPath) });
     if (!safeValidationCommand(command, config)) {
@@ -1103,6 +1143,7 @@ async function runValidation(repo, state, config) {
     }
     const result = await runProcess('bash', ['-lc', command], {
       cwd: state.integration.worktreePath,
+      env: setup.env,
       timeoutMs: config.timeoutMinutes * 60 * 1000,
       maxOutputBytes: 6 * 1024 * 1024,
     });
@@ -1289,6 +1330,276 @@ function defaultDecisionForValidation(run, logText = '') {
   if (projectDependencyFailure(run, logText)) return 'repair_requested';
   if (localEnvironmentFailure(run, logText)) return 'environment_required';
   return 'repair_requested';
+}
+
+function shellQuoteArg(value) {
+  const text = String(value ?? '');
+  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(text)) return text;
+  return `'${text.replace(/'/g, "'\\''")}'`;
+}
+
+function formatArgv(argv) {
+  return argv.map(shellQuoteArg).join(' ');
+}
+
+async function fileExists(file) {
+  try {
+    const info = await stat(file);
+    return info.isFile();
+  } catch (error) {
+    if (error?.code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
+function pythonBinaryForPytest(command) {
+  const match = normalizedCommand(command).match(/^(python3?|python\d+(?:\.\d+)?) -m pytest(?:\s|$)/);
+  return match?.[1] ?? null;
+}
+
+function npmPrefixForValidationCommand(command) {
+  const normalized = normalizedCommand(command);
+  const prefixed = normalized.match(/^npm --prefix ([^\s]+) run(?:\s|$)/);
+  if (prefixed) return prefixed[1];
+  if (/^npm (?:test|run)(?:\s|$)/.test(normalized)) return '.';
+  return null;
+}
+
+async function pythonRequirementFiles(worktreePath) {
+  const rootDev = 'requirements-dev.txt';
+  if (await fileExists(path.join(worktreePath, rootDev))) return [rootDev];
+  const rootRuntime = 'requirements.txt';
+  if (await fileExists(path.join(worktreePath, rootRuntime))) return [rootRuntime];
+  const candidates = [
+    'backend/requirements-dev.txt',
+    'backend/requirements.txt',
+    'worker-agent/requirements.txt',
+    'mcp-server/requirements.txt',
+  ];
+  const existing = [];
+  for (const candidate of candidates) {
+    if (await fileExists(path.join(worktreePath, candidate))) existing.push(candidate);
+  }
+  return existing;
+}
+
+function projectDependencyRepairApprovedFromContext(context) {
+  return (context?.repairRequests ?? []).some((request) => {
+    if (request.type !== 'validation') return false;
+    return projectDependencyFailure(
+      { command: request.command, error: request.summary ?? request.note ?? '' },
+      `${request.summary ?? ''}\n${request.note ?? ''}`,
+    );
+  });
+}
+
+async function projectDependencySetupApproved(repo, state, config) {
+  if (!config.autoInstallProjectDependencies) return { approved: false, reason: 'disabled by config' };
+  const context = await humanRepairContextForState(repo, state);
+  if (!projectDependencyRepairApprovedFromContext(context)) {
+    return { approved: false, reason: 'no human-approved project dependency repair request' };
+  }
+  return { approved: true, reason: `human review ${context.reviewId} approved project dependency repair`, context };
+}
+
+export async function buildProjectDependencySetupPlan(repo, state) {
+  const worktreePath = state.integration?.worktreePath;
+  const commands = [...new Set((state.validation?.commands ?? []).map(normalizedCommand).filter(Boolean))];
+  const steps = [];
+  const env = {};
+  if (!worktreePath) return { worktreePath: null, commands, steps, env };
+
+  const pythonBinary = commands.map(pythonBinaryForPytest).find(Boolean);
+  if (pythonBinary) {
+    const requirements = await pythonRequirementFiles(worktreePath);
+    if (requirements.length) {
+      const venvPath = path.join(runPaths(repo, state.runId).artifacts, 'validation-env', 'python');
+      const binDir = path.join(venvPath, process.platform === 'win32' ? 'Scripts' : 'bin');
+      const venvPython = path.join(binDir, process.platform === 'win32' ? 'python.exe' : 'python');
+      steps.push({
+        id: 'python-venv',
+        kind: 'python-venv',
+        cwd: worktreePath,
+        argv: [pythonBinary, '-m', 'venv', venvPath],
+      });
+      for (const requirement of requirements) {
+        steps.push({
+          id: `python-install-${slugify(requirement, 40)}`,
+          kind: 'python-install',
+          dependsOn: 'python-venv',
+          cwd: worktreePath,
+          argv: [venvPython, '-m', 'pip', 'install', '-r', requirement],
+        });
+      }
+      env.PATH = `${binDir}${path.delimiter}${process.env.PATH ?? ''}`;
+      env.VIRTUAL_ENV = venvPath;
+      env.PYTHONDONTWRITEBYTECODE = '1';
+    }
+  }
+
+  const npmPrefixes = [...new Set(commands.map(npmPrefixForValidationCommand).filter(Boolean))];
+  for (const prefix of npmPrefixes) {
+    let relativePrefix;
+    try {
+      relativePrefix = normalizeRelative(prefix, worktreePath);
+    } catch {
+      continue;
+    }
+    if (!await fileExists(path.join(worktreePath, relativePrefix, 'package.json'))) continue;
+    const hasLock = await fileExists(path.join(worktreePath, relativePrefix, 'package-lock.json'));
+    const npmInstallArgs = hasLock ? ['npm', '--prefix', relativePrefix, 'ci'] : ['npm', '--prefix', relativePrefix, 'install', '--no-package-lock'];
+    steps.push({
+      id: `npm-${slugify(relativePrefix, 40)}`,
+      kind: 'npm-install',
+      cwd: worktreePath,
+      argv: npmInstallArgs,
+    });
+  }
+
+  return {
+    worktreePath,
+    commands,
+    steps: steps.map((step) => ({ ...step, command: formatArgv(step.argv) })),
+    env,
+  };
+}
+
+function validationCommandNeedsNpmSetup(command) {
+  const normalized = normalizedCommand(command);
+  return Boolean(npmPrefixForValidationCommand(normalized)) || /^node\s+.*validate-product.*\.mjs(?:\s|$)/.test(normalized);
+}
+
+async function pathExists(file) {
+  try {
+    await lstat(file);
+    return true;
+  } catch (error) {
+    if (error?.code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
+async function removeStaleNpmArtifacts(repo, state, plan) {
+  const removed = [];
+  for (const step of plan.steps.filter((candidate) => candidate.kind === 'npm-install')) {
+    const prefixIndex = step.argv.indexOf('--prefix');
+    if (prefixIndex === -1) continue;
+    const prefix = step.argv[prefixIndex + 1];
+    if (!prefix) continue;
+    let nodeModulesRelative;
+    try {
+      nodeModulesRelative = normalizeRelative(path.join(prefix, 'node_modules'), step.cwd);
+    } catch {
+      continue;
+    }
+    const nodeModulesPath = path.join(step.cwd, nodeModulesRelative);
+    if (!await pathExists(nodeModulesPath)) continue;
+    await rm(nodeModulesPath, { recursive: true, force: true });
+    removed.push(nodeModulesRelative);
+  }
+  if (removed.length) {
+    await appendEvent(repo, state, { type: 'validation.setup.cleaned', paths: removed });
+  }
+}
+
+async function prepareProjectDependencySetup(repo, state, config) {
+  state.validation.setupRuns = [];
+  const approval = await projectDependencySetupApproved(repo, state, config);
+  if (!approval.approved) {
+    state.validation.setup = { enabled: false, reason: approval.reason, steps: [] };
+    return { env: process.env, runInitial: async () => {}, runBeforeCommand: async () => {} };
+  }
+
+  const plan = await buildProjectDependencySetupPlan(repo, state);
+  state.validation.setup = {
+    enabled: true,
+    reason: approval.reason,
+    steps: plan.steps.map((step) => ({ id: step.id, kind: step.kind, command: step.command })),
+  };
+  if (!plan.steps.length) {
+    await appendEvent(repo, state, { type: 'validation.setup.skipped', reason: 'no dependency setup commands could be derived from validation commands and checked-in manifests' });
+    return { env: { ...process.env, ...plan.env }, runInitial: async () => {}, runBeforeCommand: async () => {} };
+  }
+
+  let planAnnounced = false;
+  const failedStepIds = new Set();
+  const finishedStepIds = new Set();
+  const setupEnv = { ...process.env, ...plan.env };
+  let staleNpmArtifactsRemoved = false;
+
+  const runSteps = async (predicate) => {
+    const selected = plan.steps.filter((step) => predicate(step));
+    if (!selected.some((step) => !finishedStepIds.has(step.id))) return;
+    if (!planAnnounced) {
+      planAnnounced = true;
+      await appendEvent(repo, state, { type: 'validation.setup.plan', steps: plan.steps.length, reason: approval.reason });
+    }
+    for (const step of selected) {
+      if (finishedStepIds.has(step.id)) continue;
+      const index = plan.steps.findIndex((candidate) => candidate.id === step.id);
+      const logPath = path.join(runPaths(repo, state.runId).commands, `validation-setup-${String(index + 1).padStart(2, '0')}.log`);
+      if (step.dependsOn && failedStepIds.has(step.dependsOn)) {
+        const record = {
+          command: step.command,
+          kind: step.kind,
+          ok: false,
+          skipped: true,
+          exitCode: null,
+          durationMs: 0,
+          logPath: path.relative(repo, logPath),
+          error: `Skipped because setup step '${step.dependsOn}' failed.`,
+        };
+        await writeFile(logPath, `${record.error}\n`, 'utf8');
+        state.validation.setupRuns.push(record);
+        await appendEvent(repo, state, { type: 'validation.setup.skipped', command: step.command, reason: record.error, index: index + 1, total: plan.steps.length });
+        finishedStepIds.add(step.id);
+        continue;
+      }
+
+      await appendEvent(repo, state, { type: 'validation.setup.started', command: step.command, kind: step.kind, index: index + 1, total: plan.steps.length, logPath: path.relative(repo, logPath) });
+      let result;
+      try {
+        result = await runProcess(step.argv[0], step.argv.slice(1), {
+          cwd: step.cwd,
+          env: setupEnv,
+          timeoutMs: config.timeoutMinutes * 60 * 1000,
+          maxOutputBytes: 6 * 1024 * 1024,
+        });
+      } catch (error) {
+        result = { code: -1, signal: null, stdout: '', stderr: error.message, durationMs: 0 };
+      }
+      const output = `${result.stdout}\n${result.stderr}`;
+      await writeFile(logPath, redactText(output, 6 * 1024 * 1024), 'utf8');
+      const record = {
+        command: step.command,
+        kind: step.kind,
+        ok: result.code === 0,
+        exitCode: result.code,
+        durationMs: result.durationMs,
+        logPath: path.relative(repo, logPath),
+      };
+      state.validation.setupRuns.push(record);
+      if (!record.ok) failedStepIds.add(step.id);
+      finishedStepIds.add(step.id);
+      await appendEvent(repo, state, { type: 'validation.setup.completed', command: step.command, kind: step.kind, ok: record.ok, exitCode: record.exitCode, durationMs: record.durationMs, logPath: record.logPath });
+    }
+    await saveState(repo, state);
+  };
+
+  return {
+    env: setupEnv,
+    runInitial: async () => {
+      if (!staleNpmArtifactsRemoved) {
+        staleNpmArtifactsRemoved = true;
+        await removeStaleNpmArtifacts(repo, state, plan);
+      }
+      await runSteps((step) => step.kind.startsWith('python-'));
+    },
+    runBeforeCommand: async (command) => {
+      if (!validationCommandNeedsNpmSetup(command)) return;
+      await runSteps((step) => step.kind === 'npm-install');
+    },
+  };
 }
 
 function itemCounts(items) {
@@ -1932,7 +2243,7 @@ function reviewTypeLabel(item, theme) {
 
 function defaultActionReason(item) {
   if (item.defaultDecision === 'environment_required') return 'This looks like missing system tooling, services, credentials, or local setup outside the repo.';
-  if (item.type === 'validation' && projectDependencyFailure(item, item.logExcerpt ?? '')) return 'This looks like a missing project dependency; Codex can update requirements or package manifests.';
+  if (item.type === 'validation' && projectDependencyFailure(item, item.logExcerpt ?? '')) return 'This looks like a missing project dependency; Codex can update manifests and resume can prepare checked-in deps.';
   if (item.type === 'validation') return 'This command failed as a repository validation check and likely needs a repair or safer validation entrypoint.';
   if (item.type === 'criterion') return 'This acceptance criterion is not proven by the current integrated result.';
   if (item.type === 'finding') return 'A reviewer marked this as a blocking correctness or security finding.';
@@ -2081,12 +2392,14 @@ export async function reviewCommand(options, { inputStream = process.stdin, outp
   const hasRepairRequests = decisions.some((decision) => decision.decision === 'repair_requested');
   const hasEnvironmentItems = decisions.some((decision) => decision.decision === 'environment_required');
   const hasManualItems = decisions.some((decision) => decision.decision === 'manual_required');
+  const hasProjectDependencyRepair = projectDependencyRepairApprovedFromContext(recorded.repairContext);
 
   const lines = [
     `${theme.green('Human review saved')} for run ${runId}.`,
     `Artifact: ${recorded.artifactPath}`,
     `Decisions: ${JSON.stringify(session.counts.byDecision)}`,
     hasRepairRequests ? `${theme.cyan('Repair requested:')} these items will be included in the next repair-planning prompt.` : `${theme.dim('No repair requests were recorded for repair planning.')}`,
+    hasProjectDependencyRepair ? `${theme.cyan('Project dependencies:')} resume may prepare checked-in Python/npm dependencies in the integration worktree before validation.` : null,
     hasEnvironmentItems ? `${theme.yellow('Environment required:')} resolve missing tools, dependencies, services, or credentials before resuming.` : null,
     hasManualItems ? `${theme.magenta('Manual required:')} complete or verify manual work before resuming.` : null,
     theme.bold('Next resume command:'),
@@ -2409,6 +2722,8 @@ Run/resume options:
   --quiet               Suppress live progress output
   --verbose             Print additional sanitized progress details
   --no-color            Disable colorized terminal output
+  --no-auto-install-deps
+                        Do not auto-prepare checked-in project deps after human approval
   --raw                 Retain raw Codex JSONL in addition to sanitized events
   --allow-dirty         Allow starting from a dirty repository (not recommended)
   --keep-worktrees      Keep completed worker worktrees

@@ -178,6 +178,8 @@ export function renderProgressLine(event, { verbose = false, repo = null } = {})
       return `[workstream] ${event.workstreamId} failed ${event.error ?? ''}`.trim();
     case 'workstream.checks.nonblocking':
       return `[workstream] ${event.workstreamId} nonblocking failed checks=${list(event.commands, 3)}`;
+    case 'workstream.dependency-setup.deferred':
+      return `[workstream] ${event.workstreamId} deferred dependency setup checks=${list(event.checks, 3)}`;
     case 'workstream.snapshot.saved':
       return verbose ? `[snapshot] ${event.workstreamId} ${event.reason} ${event.path} archive=${event.archiveOk ? 'ok' : 'failed'}` : null;
     case 'workstream.resume.reset':
@@ -214,6 +216,22 @@ export function renderProgressLine(event, { verbose = false, repo = null } = {})
       ]);
     case 'validation.rejected':
       return `[validation] rejected ${event.command} reason=${event.reason}`;
+    case 'validation.setup.plan':
+      return `[validation-setup] enabled steps=${event.steps ?? 0}${event.reason ? ` reason=${preview(event.reason, 120)}` : ''}`;
+    case 'validation.setup.started':
+      return `[validation-setup] ${event.index}/${event.total} started ${event.command}`;
+    case 'validation.setup.completed':
+      return details([
+        `[validation-setup] ${event.ok ? 'passed' : 'failed'}`,
+        `exit=${event.exitCode}`,
+        `duration=${duration(event.durationMs)}`,
+        verbose && event.logPath ? `log=${event.logPath}` : '',
+        event.command,
+      ]);
+    case 'validation.setup.cleaned':
+      return `[validation-setup] cleaned generated deps=${list(event.paths, 3)}`;
+    case 'validation.setup.skipped':
+      return `[validation-setup] skipped${event.command ? ` ${event.command}` : ''}${event.reason ? ` reason=${preview(event.reason, 160)}` : ''}`;
     case 'inspection.started':
       return `[inspection] ${event.role} started phase=${event.inspectionPhase ?? event.phase}`;
     case 'inspection.completed':
