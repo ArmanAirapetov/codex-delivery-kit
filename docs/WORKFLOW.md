@@ -65,11 +65,13 @@ Foreground запуск пишет concise sanitized progress в stderr и фи�
 ./scripts/codex-delivery logs --follow
 ./scripts/codex-delivery logs --follow --tail 30
 ./scripts/codex-delivery logs --follow --all
+./scripts/codex-delivery review --run <run-id>
+./scripts/codex-delivery review --run <run-id> --json
 ./scripts/codex-delivery status
 ./scripts/codex-delivery report
 ```
 
-`logs --follow` показывает тот же sanitized progress из `events.jsonl`, который foreground run пишет в stderr. По умолчанию follow выводит последние 80 event records и затем новые события; `--tail <n>` меняет размер начальной истории, `--all` включает полный history dump перед follow. Normal output включает фазы, sanitized command starts, file-change counts, длину agent messages и background heartbeats, поэтому долгий agent не выглядит зависшим. Plain `logs` без `--follow` по-прежнему выводит весь event history. `summary.md` обновляется после фаз, workstream и gate transitions. `status` дополнительно показывает background PID, heartbeat и log path, если run был запущен через `--background`.
+`logs --follow` показывает тот же sanitized progress из `events.jsonl`, который foreground run пишет в stderr. По умолчанию follow выводит последние 80 event records и затем новые события; `--tail <n>` меняет размер начальной истории, `--all` включает полный history dump перед follow. Normal output включает фазы, sanitized command starts, file-change counts, длину agent messages и background heartbeats, поэтому долгий agent не выглядит зависшим. Plain `logs` без `--follow` по-прежнему выводит весь event history. `review --json` строит read-only inbox для внешнего UI или ручного анализа. `summary.md` обновляется после фаз, workstream, human-review и gate transitions. `status` дополнительно показывает background PID, heartbeat и log path, если run был запущен через `--background`.
 
 Текущий run ID:
 
@@ -136,10 +138,13 @@ git cherry-pick <integration-commit>
 Если причина исправима без изменения base branch, можно продолжить тот же run:
 
 ```bash
+./scripts/codex-delivery review --run <run-id>
 ./scripts/codex-delivery resume --run <run-id>
 ./scripts/codex-delivery resume --repo /path/to/project --run <run-id>
 ./scripts/codex-delivery resume --run <run-id> --background
 ```
+
+`review` запускает guided terminal review только для `blocked`/`failed` runs. Он собирает failed validation commands, failed/unknown acceptance criteria и blocking reviewer/security findings, предлагает default decision (`repair_requested`, `environment_required`, `manual_required`, `acknowledged`) и сохраняет решения в `human-reviews.jsonl`, `artifacts/human-reviews/*.json`, `state.humanReviews` и `summary.md`. После записи команда печатает рекомендуемый `resume --max-repairs ... --background`; если рабочее дерево грязное, отдельно печатается вариант с `--allow-dirty`.
 
 Resume сохраняет прежний terminal result в `state.resumes` и `artifacts/resume-*.json`, архивирует failed/running workstreams перед reset и продолжает DAG от текущего integration commit. Accepted/integrated workstreams не запускаются повторно.
 

@@ -10,6 +10,7 @@ node scripts/mcp-smoke.mjs
 node scripts/hook-smoke.mjs
 node scripts/install-smoke.mjs
 node scripts/analyzer-smoke.mjs
+node scripts/review-smoke.mjs
 node scripts/workflow-smoke.mjs
 
 echo "smoke-test: ALL OK"

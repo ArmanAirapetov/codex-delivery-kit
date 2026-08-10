@@ -3,9 +3,11 @@ import { spawn } from 'node:child_process';
 import { open, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
+import { createInterface } from 'node:readline/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import {
+  appendJsonl,
   appendEvent,
   appendResult,
   attachEventSink,
@@ -22,6 +24,7 @@ import {
   saveState,
   scopeMatches,
   serializeOverlappingWorkstreams,
+  sha256,
   slugify,
   topologicalOrder,
   transition,
@@ -42,6 +45,7 @@ import {
   removeWorktree,
   repoRoot as findRepoRoot,
   runProcess,
+  statusPorcelain,
 } from './lib/git.mjs';
 import { codexAvailable, runCodex } from './lib/codex-runner.mjs';
 import {
@@ -66,6 +70,7 @@ const BOOLEAN_OPTIONS = new Set([
   'help',
   'h',
   'integration',
+  'json',
   'keepWorktrees',
   'logs',
   'quiet',
@@ -75,6 +80,25 @@ const BOOLEAN_OPTIONS = new Set([
 const BACKGROUND_TERMINAL_STATUSES = new Set(['exited', 'failed', 'stopped']);
 const DELIVERY_TERMINAL_PHASES = new Set(['accepted', 'blocked', 'failed']);
 const DEFAULT_FOLLOW_TAIL = 80;
+const HUMAN_REVIEW_DECISION_VALUES = [
+  'repair_requested',
+  'environment_required',
+  'manual_required',
+  'acknowledged',
+];
+const HUMAN_REVIEW_DECISIONS = new Set(HUMAN_REVIEW_DECISION_VALUES);
+const HUMAN_REVIEW_DECISION_SHORTCUTS = new Map([
+  ['r', 'repair_requested'],
+  ['repair', 'repair_requested'],
+  ['e', 'environment_required'],
+  ['env', 'environment_required'],
+  ['environment', 'environment_required'],
+  ['m', 'manual_required'],
+  ['manual', 'manual_required'],
+  ['a', 'acknowledged'],
+  ['ack', 'acknowledged'],
+]);
+const BLOCKING_FINDING_SEVERITIES = new Set(['critical', 'high', 'medium']);
 export const DEFAULT_CONFIG = {
   codexBinary: 'codex',
   maxParallel: 4,
@@ -1137,6 +1161,293 @@ function qualityGate(state) {
   };
 }
 
+function countBy(values) {
+  return values.reduce((acc, value) => {
+    const key = String(value ?? 'unknown');
+    acc[key] = (acc[key] ?? 0) + 1;
+    return acc;
+  }, {});
+}
+
+function stableReviewItemId(prefix, seed, length = 10) {
+  return `${prefix}-${sha256(JSON.stringify(seed)).slice(0, length)}`;
+}
+
+function relativeToRepo(repo, value) {
+  if (!value) return null;
+  const text = String(value);
+  if (!path.isAbsolute(text)) return text.split(path.sep).join('/');
+  const relative = path.relative(repo, text).split(path.sep).join('/');
+  return relative && !relative.startsWith('../') ? relative : text;
+}
+
+function resolveArtifactPath(repo, value) {
+  if (!value) return null;
+  return path.isAbsolute(String(value)) ? String(value) : path.join(repo, String(value));
+}
+
+async function readLogExcerpt(repo, run, max = 2400) {
+  const logPath = resolveArtifactPath(repo, run?.logPath);
+  if (!logPath) return '';
+  try {
+    return redactText(await readFile(logPath, 'utf8'), max);
+  } catch {
+    return '';
+  }
+}
+
+function missingToolFailure(run, logText = '') {
+  const text = `${run?.error ?? ''}\n${logText ?? ''}`;
+  const command = normalizedCommand(run?.command);
+  if (Number(run?.exitCode) === 127) return true;
+  if (/(?:command not found|executable not found|ENOENT|No module named|Cannot find module|(?:^|\s)(?:sh|bash): .*not found)/i.test(text)) return true;
+  if (/^python(?:3)? -m pytest(?:\s|$)/.test(command) && /pytest/i.test(text) && /(?:not installed|not available|not found|No module named)/i.test(text)) return true;
+  if (/^npm(?:\s|$)|^npm --prefix /.test(command) && /(?:npm: command not found|sh: .*npm.*not found|Cannot find module)/i.test(text)) return true;
+  if (/^docker compose(?:\s|$)|^docker-compose(?:\s|$)/.test(command) && /(?:docker: command not found|docker-compose: command not found|Cannot connect to the Docker daemon)/i.test(text)) return true;
+  return false;
+}
+
+function defaultDecisionForValidation(run, logText = '') {
+  if (/allowlist/i.test(String(run?.error ?? ''))) return 'repair_requested';
+  if (missingToolFailure(run, logText)) return 'environment_required';
+  return 'repair_requested';
+}
+
+function itemCounts(items) {
+  return {
+    total: items.length,
+    validation: items.filter((item) => item.type === 'validation').length,
+    criteria: items.filter((item) => item.type === 'criterion').length,
+    findings: items.filter((item) => item.type === 'finding').length,
+    byDefaultDecision: countBy(items.map((item) => item.defaultDecision)),
+  };
+}
+
+function decisionCounts(decisions) {
+  return {
+    total: decisions.length,
+    byDecision: countBy(decisions.map((item) => item.decision)),
+  };
+}
+
+function reviewItemDecisionSeed(item) {
+  return {
+    itemId: item.id,
+    type: item.type,
+    title: item.title,
+    command: item.command ?? null,
+    criterionId: item.criterionId ?? null,
+    role: item.role ?? null,
+    severity: item.severity ?? null,
+    paths: item.paths ?? [],
+    criterionIds: item.criterionIds ?? [],
+  };
+}
+
+function recommendedMaxRepairsFor(state, items) {
+  if (!items.length) return Number(state.maxRepairs ?? DEFAULT_CONFIG.maxRepairs);
+  return Math.max(Number(state.maxRepairs ?? DEFAULT_CONFIG.maxRepairs), Number(state.repairIteration ?? 0) + 1);
+}
+
+export async function buildHumanReviewInbox(repo, state, { includeLogExcerpts = true, background = null } = {}) {
+  const gate = state.final?.gate ?? qualityGate(state);
+  const items = [];
+
+  const failedCommands = gate.failedCommands?.length
+    ? gate.failedCommands
+    : (state.validation?.runs ?? []).filter((run) => !run.ok);
+  for (const run of failedCommands) {
+    const logExcerpt = includeLogExcerpts ? await readLogExcerpt(repo, run) : '';
+    const summaryParts = [
+      run?.error,
+      run?.exitCode !== null && run?.exitCode !== undefined && Number.isFinite(Number(run.exitCode)) ? `exit=${run.exitCode}` : null,
+      logExcerpt ? `log excerpt: ${logExcerpt.replace(/\s+/g, ' ').trim()}` : null,
+    ].filter(Boolean);
+    const defaultDecision = defaultDecisionForValidation(run, logExcerpt);
+    items.push({
+      id: stableReviewItemId('VAL', [normalizedCommand(run?.command)]),
+      type: 'validation',
+      status: 'failed',
+      title: `Validation failed: ${normalizedCommand(run?.command) || 'unknown command'}`,
+      summary: redactText(summaryParts.join(' | ') || 'Validation command failed.', 1200),
+      defaultDecision,
+      command: normalizedCommand(run?.command),
+      exitCode: run?.exitCode ?? null,
+      durationMs: run?.durationMs ?? null,
+      logPath: relativeToRepo(repo, run?.logPath),
+      logExcerpt,
+    });
+  }
+
+  const criteriaById = new Map((state.acceptanceCriteria ?? []).map((item) => [item.id, item]));
+  const failedCriteria = gate.failedCriteria?.length
+    ? gate.failedCriteria
+    : (state.verification?.criteria ?? []).filter((item) => item.status !== 'proven');
+  for (const criterion of failedCriteria) {
+    const criterionId = String(criterion.id ?? 'unknown');
+    const text = criteriaById.get(criterionId)?.text ?? criterion.text ?? 'Acceptance criterion is not proven.';
+    items.push({
+      id: `AC-${criterionId.replace(/^AC-/, '')}`,
+      type: 'criterion',
+      status: criterion.status ?? 'unknown',
+      title: `${criterionId}: ${criterion.status ?? 'unknown'}`,
+      summary: redactText(text, 1200),
+      defaultDecision: 'repair_requested',
+      criterionId,
+      evidence: (criterion.evidence ?? []).map((item) => redactText(item, 800)),
+      paths: [...new Set((criterion.paths ?? []).map(String))],
+      commands: [...new Set((criterion.commands ?? []).map(String))],
+    });
+  }
+
+  const blockingFindings = gate.blockingFindings?.length
+    ? gate.blockingFindings
+    : (state.reviews ?? [])
+      .flatMap((review) => (review.findings ?? []).map((finding) => ({ ...finding, role: review.role })))
+      .filter((finding) => BLOCKING_FINDING_SEVERITIES.has(finding.severity));
+  for (const finding of blockingFindings) {
+    const role = finding.role ?? 'review';
+    items.push({
+      id: stableReviewItemId(`F-${slugify(role, 20)}`, [finding.title, finding.summary, finding.paths, finding.criterionIds]),
+      type: 'finding',
+      status: 'blocking',
+      title: finding.title ?? `${finding.severity ?? 'review'} finding`,
+      summary: redactText(finding.summary ?? finding.recommendation ?? 'Blocking review finding.', 1200),
+      defaultDecision: 'repair_requested',
+      role,
+      severity: finding.severity ?? 'medium',
+      recommendation: finding.recommendation ? redactText(finding.recommendation, 1200) : null,
+      reproduction: (finding.reproduction ?? []).map((item) => redactText(item, 800)),
+      paths: [...new Set((finding.paths ?? []).map(String))],
+      criterionIds: [...new Set((finding.criterionIds ?? []).map(String))],
+    });
+  }
+
+  const findingRoles = new Set(blockingFindings.map((finding) => finding.role ?? 'review'));
+  for (const review of gate.reviewFailures ?? []) {
+    const role = review.role ?? 'review';
+    if (findingRoles.has(role)) continue;
+    items.push({
+      id: stableReviewItemId(`F-${slugify(role, 20)}`, ['review-verdict', review.verdict, review.summary]),
+      type: 'finding',
+      status: 'blocking',
+      title: `${role} review verdict: ${review.verdict ?? 'not approved'}`,
+      summary: redactText(review.summary ?? 'Review did not approve the integrated change.', 1200),
+      defaultDecision: 'repair_requested',
+      role,
+      severity: 'medium',
+      recommendation: 'Repair or re-run review until this review track approves.',
+      reproduction: [],
+      paths: [],
+      criterionIds: [],
+    });
+  }
+
+  const counts = itemCounts(items);
+  return {
+    runId: state.runId,
+    generatedAt: now(),
+    phase: state.phase,
+    terminal: ['blocked', 'failed', 'accepted'].includes(state.phase),
+    objective: state.objective,
+    baseCommit: state.baseCommit,
+    integrationCommit: state.integration?.commit ?? null,
+    integrationWorktree: state.integration?.worktreePath ?? null,
+    repairIteration: state.repairIteration ?? 0,
+    maxRepairs: state.maxRepairs ?? DEFAULT_CONFIG.maxRepairs,
+    recommendedMaxRepairs: recommendedMaxRepairsFor(state, items),
+    finalSummary: state.final?.summary ?? null,
+    background,
+    counts,
+    items,
+  };
+}
+
+function buildHumanRepairContext(session) {
+  const repairRequests = session.decisions
+    .filter((decision) => decision.decision === 'repair_requested')
+    .map((decision) => {
+      const item = session.items.find((candidate) => candidate.id === decision.itemId) ?? {};
+      return {
+        itemId: decision.itemId,
+        type: decision.type,
+        title: decision.title,
+        summary: item.summary ?? null,
+        command: item.command ?? null,
+        criterionId: item.criterionId ?? null,
+        role: item.role ?? null,
+        severity: item.severity ?? null,
+        paths: item.paths ?? [],
+        criterionIds: item.criterionIds ?? [],
+        note: decision.note || null,
+      };
+    });
+  if (!repairRequests.length) return null;
+  return {
+    reviewId: session.id,
+    reviewedAt: session.at,
+    phase: session.phase,
+    integrationCommit: session.integrationCommit,
+    repairRequests,
+  };
+}
+
+function latestHumanRepairContext(state) {
+  for (const review of [...(state.humanReviews ?? [])].reverse()) {
+    if (review?.repairContext?.repairRequests?.length) return review.repairContext;
+  }
+  return null;
+}
+
+async function meaningfulStatusEntries(repo) {
+  const status = await statusPorcelain(repo);
+  return status
+    .split('\n')
+    .filter(Boolean)
+    .filter((line) => !line.slice(3).startsWith('.codex/delivery-runs/'));
+}
+
+async function recordHumanReview(repo, state, session) {
+  const paths = runPaths(repo, state.runId);
+  const reviewDir = path.join(paths.artifacts, 'human-reviews');
+  await ensureDir(reviewDir);
+  const artifact = path.join(reviewDir, `${snapshotStamp()}-${slugify(session.id, 40)}.json`);
+  const relativeArtifact = relativeToRepo(repo, artifact);
+  const repairContext = buildHumanRepairContext(session);
+  const full = { ...session, artifactPath: relativeArtifact, repairContext };
+  await writeJsonAtomic(artifact, full);
+
+  const compactDecisions = session.decisions.map((decision) => ({
+    itemId: decision.itemId,
+    type: decision.type,
+    decision: decision.decision,
+    title: decision.title,
+    note: decision.note || undefined,
+  }));
+  const compact = {
+    id: session.id,
+    at: session.at,
+    runId: state.runId,
+    phase: state.phase,
+    integrationCommit: state.integration?.commit ?? null,
+    artifactPath: relativeArtifact,
+    counts: session.counts,
+    decisions: compactDecisions,
+  };
+  await appendJsonl(path.join(paths.root, 'human-reviews.jsonl'), compact);
+  state.humanReviews ??= [];
+  state.humanReviews.push({ ...compact, repairContext });
+  await appendEvent(repo, state, {
+    type: 'human.review.recorded',
+    reviewId: session.id,
+    artifactPath: relativeArtifact,
+    decisions: session.counts.byDecision,
+    items: session.items.length,
+  });
+  await saveState(repo, state);
+  return { artifactPath: relativeArtifact, repairContext };
+}
+
 async function planRepair(repo, state, config, gate) {
   state.repairIteration += 1;
   transition(state, 'repair', `quality gate failed; repair ${state.repairIteration}`);
@@ -1156,6 +1467,7 @@ async function planRepair(repo, state, config, gate) {
       criteria: state.acceptanceCriteria,
       verification: { verdict: state.verification?.verdict, failedCriteria: gate.failedCriteria, failedCommands: gate.failedCommands },
       reviews: state.reviews,
+      humanReview: latestHumanRepairContext(state),
       iteration: state.repairIteration,
       maxParallel: config.maxParallel,
     }),
@@ -1487,6 +1799,164 @@ async function latestRunId(repo) {
   }
 }
 
+function renderReviewItem(item, index, total) {
+  const fields = [
+    `${index + 1}/${total}`,
+    item.id,
+    item.type,
+    item.status,
+    item.severity ? `severity=${item.severity}` : null,
+    item.role ? `role=${item.role}` : null,
+    item.defaultDecision ? `default=${item.defaultDecision}` : null,
+  ].filter(Boolean).join(' ');
+  const lines = [
+    `[${fields}]`,
+    item.title,
+    item.summary ? `Summary: ${item.summary}` : null,
+    item.command ? `Command: ${item.command}` : null,
+    item.exitCode !== null && item.exitCode !== undefined ? `Exit: ${item.exitCode}` : null,
+    item.criterionId ? `Criterion: ${item.criterionId}` : null,
+    item.paths?.length ? `Paths: ${item.paths.join(', ')}` : null,
+    item.criterionIds?.length ? `Criteria: ${item.criterionIds.join(', ')}` : null,
+    item.logPath ? `Log: ${item.logPath}` : null,
+    item.recommendation ? `Recommendation: ${item.recommendation}` : null,
+  ].filter(Boolean);
+  return `${lines.join('\n')}\n`;
+}
+
+function normalizeHumanDecision(value, fallback) {
+  const normalized = String(value ?? '').trim().toLowerCase().replace(/[-\s]+/g, '_');
+  if (!normalized) return fallback;
+  if (HUMAN_REVIEW_DECISIONS.has(normalized)) return normalized;
+  if (HUMAN_REVIEW_DECISION_SHORTCUTS.has(normalized)) return HUMAN_REVIEW_DECISION_SHORTCUTS.get(normalized);
+  return null;
+}
+
+async function promptHumanReviewDecisions(inbox, { inputStream = process.stdin, outputStream = process.stdout } = {}) {
+  const scriptedAnswers = inputStream.isTTY === true ? null : await readPipedAnswers(inputStream);
+  const rl = scriptedAnswers ? null : createInterface({ input: inputStream, output: outputStream });
+  const decisions = [];
+  try {
+    outputStream.write([
+      `Human review for run ${inbox.runId}`,
+      `Phase: ${inbox.phase}`,
+      `Items: ${inbox.counts.total} (${inbox.counts.validation} validation, ${inbox.counts.criteria} criteria, ${inbox.counts.findings} findings)`,
+      `Decisions: ${HUMAN_REVIEW_DECISION_VALUES.join(', ')}`,
+      'Press Enter to accept the default decision for an item.',
+      '',
+    ].join('\n'));
+
+    for (let index = 0; index < inbox.items.length; index += 1) {
+      const item = inbox.items[index];
+      outputStream.write(`${renderReviewItem(item, index, inbox.items.length)}\n`);
+      let decision = null;
+      while (!decision) {
+        const answer = await reviewQuestion({
+          rl,
+          scriptedAnswers,
+          outputStream,
+          prompt: `Decision [${HUMAN_REVIEW_DECISION_VALUES.join('/')}] default=${item.defaultDecision}: `,
+        });
+        decision = normalizeHumanDecision(answer, item.defaultDecision);
+        if (!decision) outputStream.write(`Invalid decision. Use one of: ${HUMAN_REVIEW_DECISION_VALUES.join(', ')}.\n`);
+      }
+      const note = redactText(await reviewQuestion({ rl, scriptedAnswers, outputStream, prompt: 'Note (optional): ' }), 2000).trim();
+      decisions.push({
+        ...reviewItemDecisionSeed(item),
+        itemId: item.id,
+        decision,
+        defaultDecision: item.defaultDecision,
+        note,
+      });
+      outputStream.write('\n');
+    }
+  } finally {
+    rl?.close();
+  }
+  return decisions;
+}
+
+async function readPipedAnswers(inputStream) {
+  let text = '';
+  for await (const chunk of inputStream) text += chunk.toString();
+  return text.split(/\r?\n/);
+}
+
+async function reviewQuestion({ rl, scriptedAnswers, outputStream, prompt }) {
+  if (!scriptedAnswers) return rl.question(prompt);
+  outputStream.write(prompt);
+  if (!scriptedAnswers.length) throw new UserFacingError('Not enough piped input for human review.');
+  return scriptedAnswers.shift();
+}
+
+function resumeCommandForReview(runId, maxRepairs, allowDirty = false) {
+  return `./scripts/codex-delivery resume --run ${runId} --max-repairs ${maxRepairs} --background${allowDirty ? ' --allow-dirty' : ''}`;
+}
+
+export async function reviewCommand(options, { inputStream = process.stdin, outputStream = process.stdout } = {}) {
+  const repo = await repositoryRootFor(await repoCwdFromOptions(options));
+  const runId = options.run || await latestRunId(repo);
+  if (!runId) throw new Error('No delivery run selected.');
+  const state = await loadState(repo, runId);
+  const background = await readBackgroundRecord(repo, runId);
+  const inbox = await buildHumanReviewInbox(repo, state, { background });
+  if (options.json) {
+    outputStream.write(`${JSON.stringify(inbox, null, 2)}\n`);
+    return inbox;
+  }
+  if (!['blocked', 'failed'].includes(state.phase)) {
+    throw new UserFacingError(`Run ${runId} is in phase '${state.phase}'. Human review decisions can be recorded only for blocked or failed runs. Use review --json for read-only inspection.`);
+  }
+  if (!inbox.items.length) {
+    outputStream.write(`Run ${runId} has no human review inbox items.\n`);
+    return inbox;
+  }
+
+  const decisions = await promptHumanReviewDecisions(inbox, { inputStream, outputStream });
+  const session = {
+    id: `HR-${snapshotStamp()}`,
+    at: now(),
+    runId,
+    phase: state.phase,
+    objective: state.objective,
+    baseCommit: state.baseCommit,
+    integrationCommit: state.integration?.commit ?? null,
+    repairIteration: state.repairIteration ?? 0,
+    maxRepairs: state.maxRepairs ?? DEFAULT_CONFIG.maxRepairs,
+    recommendedMaxRepairs: inbox.recommendedMaxRepairs,
+    items: inbox.items,
+    decisions,
+    counts: decisionCounts(decisions),
+  };
+  const recorded = await recordHumanReview(repo, state, session);
+  const dirty = await meaningfulStatusEntries(repo);
+  const hasRepairRequests = decisions.some((decision) => decision.decision === 'repair_requested');
+  const hasEnvironmentItems = decisions.some((decision) => decision.decision === 'environment_required');
+  const hasManualItems = decisions.some((decision) => decision.decision === 'manual_required');
+
+  const lines = [
+    `Human review saved for run ${runId}.`,
+    `Artifact: ${recorded.artifactPath}`,
+    `Decisions: ${JSON.stringify(session.counts.byDecision)}`,
+    hasRepairRequests ? 'Repair requests will be included in the next repair-planning prompt.' : 'No repair requests were recorded for repair planning.',
+    hasEnvironmentItems ? 'Environment-required items should be resolved before resuming.' : null,
+    hasManualItems ? 'Manual-required items should be completed before resuming.' : null,
+    'Next resume command:',
+    shellExample(resumeCommandForReview(runId, inbox.recommendedMaxRepairs)),
+  ].filter(Boolean);
+  if (dirty.length) {
+    lines.push(
+      '',
+      'Warning: repository has uncommitted changes outside delivery run artifacts; normal resume will refuse to start.',
+      ...dirty.slice(0, 12).map((entry) => `  ${entry}`),
+      'Allow-dirty variant:',
+      shellExample(resumeCommandForReview(runId, inbox.recommendedMaxRepairs, true)),
+    );
+  }
+  outputStream.write(`${lines.join('\n')}\n`);
+  return session;
+}
+
 async function statusCommand(options) {
   const repo = await repositoryRootFor(await repoCwdFromOptions(options));
   const runId = options.run || await latestRunId(repo);
@@ -1518,14 +1988,14 @@ async function statusCommand(options) {
   return state;
 }
 
-async function reportCommand(options) {
+export async function reportCommand(options, { outputStream = process.stdout } = {}) {
   const repo = await repositoryRootFor(await repoCwdFromOptions(options));
   const runId = options.run || await latestRunId(repo);
   if (!runId) throw new Error('No delivery runs found.');
   const paths = runPaths(repo, runId);
   const state = await loadState(repo, runId);
   const background = await readBackgroundRecord(repo, runId);
-  process.stdout.write(`${JSON.stringify({ runId, phase: state.phase, ...paths, integration: state.integration, background, final: state.final }, null, 2)}\n`);
+  outputStream.write(`${JSON.stringify({ runId, phase: state.phase, ...paths, integration: state.integration, background, humanReviews: state.humanReviews ?? [], final: state.final }, null, 2)}\n`);
 }
 
 async function readEventsChunk(file, offset) {
@@ -1712,6 +2182,7 @@ Usage:
   node .codex/delivery-kit/cli.mjs run <path> "<objective>" [options]
   node .codex/delivery-kit/cli.mjs resume [--repo <path>] [--run <id>] [options]
   node .codex/delivery-kit/cli.mjs logs [--repo <path>] [--run <id>] [--follow] [--tail <n>] [--all] [--verbose]
+  node .codex/delivery-kit/cli.mjs review [--repo <path>] [--run <id>] [--json]
   node .codex/delivery-kit/cli.mjs status [--repo <path>] [--run <id>]
   node .codex/delivery-kit/cli.mjs report [--repo <path>] [--run <id>]
   node .codex/delivery-kit/cli.mjs stop [--repo <path>] [--run <id>]
@@ -1727,6 +2198,7 @@ Run/resume options:
   --background          Start run/resume in a detached background process
   --tail <n>            Show only the last n event records before exiting or following
   --all                 With logs --follow, print full history before following
+  --json                With review, print the human review inbox without writing decisions
   --quiet               Suppress live progress output
   --verbose             Print additional sanitized progress details
   --raw                 Retain raw Codex JSONL in addition to sanitized events
@@ -1761,6 +2233,8 @@ async function main() {
     process.stdout.write(`${JSON.stringify(final, null, 2)}\n`);
   } else if (command === 'logs') {
     await logsCommand(options);
+  } else if (command === 'review') {
+    await reviewCommand(options);
   } else if (command === 'status') {
     await statusCommand(options);
   } else if (command === 'report') {

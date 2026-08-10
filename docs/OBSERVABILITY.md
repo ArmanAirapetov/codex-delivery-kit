@@ -123,6 +123,8 @@ Worker generations дополнительно архивируются в `artif
 
 Strict worker checks can include non-blocking failed entries. The harness logs `workstream.checks.nonblocking` when a failed check is a strict-mode workflow helper, dependency provisioning attempt, or a declared local validation command that could not run because the tool itself is unavailable. These records remain in `state.json` and agent `final.json`; the final validation gate still decides whether the integrated repository is acceptable.
 
+Human review decisions are durable run artifacts. `review --json` emits the computed inbox without writing. Interactive `review` appends compact records to `human-reviews.jsonl`, writes full snapshots to `artifacts/human-reviews/*.json`, stores compact refs/counts in `state.humanReviews`, updates `summary.md`, and emits `human.review.recorded`. Only decisions marked `repair_requested` are passed into the next repair-planning prompt.
+
 Background runs дополнительно пишут:
 
 - `background.json`: PID, mode, status, timestamps, heartbeat, exit/signal metadata;

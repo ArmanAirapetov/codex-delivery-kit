@@ -229,6 +229,12 @@ export function renderProgressLine(event, { verbose = false, repo = null } = {})
       return `[repair] iteration=${event.iteration} normalized dependencies=${(event.addedDependencies ?? []).length}`;
     case 'quality.gate':
       return `[gate] ${event.passed ? 'passed' : 'failed'} commands=${event.failedCommands} criteria=${event.failedCriteria} findings=${event.blockingFindings}`;
+    case 'human.review.recorded':
+      return details([
+        `[human-review] recorded id=${event.reviewId}`,
+        `items=${event.items ?? 0}`,
+        event.decisions ? `decisions=${JSON.stringify(event.decisions)}` : '',
+      ]);
     case 'background.started':
       return `[background] started pid=${event.pid} log=${event.backgroundLogPath ?? event.logPath ?? ''}`.trim();
     case 'background.heartbeat':

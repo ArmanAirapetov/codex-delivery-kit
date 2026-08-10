@@ -475,6 +475,11 @@ export function renderSummary(state) {
     }, {}) ?? {};
     lines.push(`- **${review.role ?? 'review'}:** ${review.verdict ?? 'unknown'} ${JSON.stringify(counts)}`);
   }
+  lines.push('', '## Human reviews', '');
+  if ((state.humanReviews ?? []).length === 0) lines.push('_No human review decisions recorded._');
+  for (const review of state.humanReviews ?? []) {
+    lines.push(`- **${review.id}** ${review.at} — decisions=${JSON.stringify(review.counts?.byDecision ?? {})}; artifact=${review.artifactPath ?? '—'}`);
+  }
   if (state.final) {
     lines.push('', '## Final', '', `**${state.final.status}:** ${state.final.summary}`);
   }

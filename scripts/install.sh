@@ -70,7 +70,7 @@ copy_replace ".agents/skills/codex-delivery"
 
 # Operator scripts.
 mkdir -p "$REPO/scripts"
-for name in codex-delivery analyze-runs.mjs install.sh validate.mjs core-smoke.mjs mcp-smoke.mjs hook-smoke.mjs install-smoke.mjs analyzer-smoke.mjs workflow-smoke.mjs smoke-test.sh; do
+for name in codex-delivery analyze-runs.mjs install.sh validate.mjs core-smoke.mjs mcp-smoke.mjs hook-smoke.mjs install-smoke.mjs analyzer-smoke.mjs review-smoke.mjs workflow-smoke.mjs smoke-test.sh; do
   relative="scripts/$name"
   backup_path "$relative"
   cp -a -- "$SOURCE_ROOT/$relative" "$REPO/$relative"

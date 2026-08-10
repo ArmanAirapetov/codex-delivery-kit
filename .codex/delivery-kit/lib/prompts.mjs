@@ -130,7 +130,7 @@ Strict harness mode records your returned JSON automatically. Do not call intera
 Do not edit files. Prefer concrete correctness, security, compatibility, reliability, and missing-test findings over style comments. Each finding must include severity, exact paths, reproduction evidence when possible, and a practical recommendation. Do not invent findings to fill the schema. Return only the JSON object required by the output schema.`;
 }
 
-export function repairPlanPrompt({ objective, criteria, verification, reviews, iteration, maxParallel }) {
+export function repairPlanPrompt({ objective, criteria, verification, reviews, humanReview = null, iteration, maxParallel }) {
   return `You are the repair planner for iteration ${iteration}.
 
 Objective:
@@ -144,8 +144,9 @@ ${json(verification, 24000)}
 
 Review findings:
 ${json(reviews, 30000)}
+${humanReview?.repairRequests?.length ? `\nHuman review repair requests:\n${json(humanReview, 20000)}\n` : ''}
 
 Strict harness mode records your returned JSON automatically. Do not call interactive workflow tools such as delivery_status, delivery_record_result, delivery_complete_workstream, or delivery_accept.
 
-Create the smallest repair DAG that addresses every failed criterion and every critical/high/medium finding. Workstream IDs must start with R${iteration}-. Use only scopes justified by concrete failed evidence. Potentially overlapping scopes must be dependency-ordered. Keep at most ${maxParallel} workstreams ready at once. Do not include already proven or unrelated improvements. Return only the JSON object required by the output schema.`;
+Create the smallest repair DAG that addresses every failed criterion and every critical/high/medium finding. Workstream IDs must start with R${iteration}-. Use human review repair requests as prioritization and additional operator context only; they do not waive any quality gate requirement. Use only scopes justified by concrete failed evidence. Potentially overlapping scopes must be dependency-ordered. Keep at most ${maxParallel} workstreams ready at once. Do not include already proven or unrelated improvements. Return only the JSON object required by the output schema.`;
 }

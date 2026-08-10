@@ -166,6 +166,8 @@ Harness всегда задаёт:
 ./scripts/codex-delivery logs --repo /path/to/project --run <run-id> --follow
 ./scripts/codex-delivery logs --repo /path/to/project --run <run-id> --follow --tail 30
 ./scripts/codex-delivery logs --repo /path/to/project --run <run-id> --follow --all
+./scripts/codex-delivery review --repo /path/to/project --run <run-id>
+./scripts/codex-delivery review --repo /path/to/project --run <run-id> --json
 ./scripts/codex-delivery status --repo /path/to/project
 ./scripts/codex-delivery stop --repo /path/to/project --run <run-id>
 ```

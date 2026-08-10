@@ -62,6 +62,7 @@ scripts/
 ├── hook-smoke.mjs
 ├── install-smoke.mjs
 ├── analyzer-smoke.mjs
+├── review-smoke.mjs
 ├── workflow-smoke.mjs
 └── smoke-test.sh
 docs/
@@ -137,6 +138,8 @@ Strict harness стартует только из чистого Git состо�
 ./scripts/codex-delivery logs --follow --run <run-id>
 ./scripts/codex-delivery logs --follow --tail 30 --run <run-id>
 ./scripts/codex-delivery logs --follow --all --run <run-id>
+./scripts/codex-delivery review --run <run-id>
+./scripts/codex-delivery review --run <run-id> --json
 ./scripts/codex-delivery status
 ./scripts/codex-delivery report
 ./scripts/codex-delivery stop --run <run-id>
@@ -154,6 +157,8 @@ Background режим сразу возвращает `runId`, `pid` и пути
 ```
 
 `logs --follow` по умолчанию выводит последние 80 event records и затем live progress; `--tail <n>` задаёт другое окно, `--all` печатает всю историю перед follow. Normal output показывает sanitized command starts, file-change counts, agent message lengths и background heartbeats, поэтому долгий agent не выглядит зависшим. Plain `logs` без `--follow` остаётся forensic full-history view.
+
+Если run остановился на `Human review is required`, используйте `review --run <run-id>` для guided terminal review. Команда собирает inbox из failed validation commands, непроверенных acceptance criteria и blocking review findings, предлагает default decision для каждого пункта, сохраняет decisions только внутри `.codex/delivery-runs/<run-id>/` и печатает безопасную команду resume. `review --json` работает read-only на любой фазе и удобен для внешнего UI.
 
 Несколько background runs в одном repository разрешены; каждый run получает собственные worktrees и run artifacts. Для одного и того же run повторный background resume отклоняется, если прежний background process ещё жив.
 Если в repository уже есть active delivery process, новый `run`/`resume` печатает notice в stderr с `runId`, `pid` и командой `logs --follow`. Это предупреждение не блокирует отдельный новый run, но same-run duplicate background resume остаётся ошибкой.
