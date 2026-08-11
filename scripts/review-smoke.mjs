@@ -9,6 +9,7 @@ import {
   buildHumanReviewInbox,
   dependencySetupDeferredWorkstream,
   humanRepairContextForState,
+  projectDependencySetupApprovalContext,
   reportCommand,
   reviewCommand,
   statusCommand,
@@ -362,6 +363,51 @@ const legacyContext = await humanRepairContextForState(repo, legacy);
 assert.equal(legacyContext.repairRequests.length, 1);
 assert.equal(legacyContext.repairRequests[0].reroutedFromEnvironment, true);
 assert.equal(legacyContext.repairRequests[0].command, 'python -m pytest tests/contracts');
+
+legacy.humanReviews.push({
+  id: 'HR-later',
+  at: now(),
+  runId: legacyRunId,
+  phase: 'blocked',
+  integrationCommit: baseCommit,
+  artifactPath: `.codex/delivery-runs/${legacyRunId}/artifacts/human-reviews/later.json`,
+  counts: { total: 1, byDecision: { repair_requested: 1 } },
+  decisions: [{ itemId: 'AC-later', type: 'criterion', decision: 'repair_requested', title: 'Criterion failed: AC-later' }],
+  repairContext: null,
+});
+await writeFile(path.join(repo, '.codex', 'delivery-runs', legacyRunId, 'artifacts', 'human-reviews', 'later.json'), JSON.stringify({
+  id: 'HR-later',
+  at: now(),
+  runId: legacyRunId,
+  phase: 'blocked',
+  integrationCommit: baseCommit,
+  items: [{
+    id: 'AC-later',
+    type: 'criterion',
+    status: 'failed',
+    title: 'Criterion failed: AC-later',
+    summary: 'A later review requested product repair only.',
+    defaultDecision: 'repair_requested',
+    criterionId: 'AC-later',
+    paths: ['src/a.txt'],
+  }],
+  decisions: [{
+    itemId: 'AC-later',
+    type: 'criterion',
+    title: 'Criterion failed: AC-later',
+    decision: 'repair_requested',
+    defaultDecision: 'repair_requested',
+    note: 'Fix product behavior.',
+  }],
+  counts: { total: 1, byDecision: { repair_requested: 1 } },
+}, null, 2), 'utf8');
+await saveState(repo, legacy);
+const laterContext = await humanRepairContextForState(repo, legacy);
+assert.equal(laterContext.reviewId, 'HR-later');
+assert.equal(laterContext.repairRequests[0].criterionId, 'AC-later');
+const setupApprovalContext = await projectDependencySetupApprovalContext(repo, legacy);
+assert.equal(setupApprovalContext.reviewId, 'HR-legacy');
+assert.equal(setupApprovalContext.repairRequests[0].command, 'python -m pytest tests/contracts');
 
 const activeRunId = 'review-active-run';
 const active = createInitialState({

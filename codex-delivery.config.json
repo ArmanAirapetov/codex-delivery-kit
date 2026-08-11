@@ -3,6 +3,8 @@
   "maxParallel": 4,
   "maxRepairs": 2,
   "timeoutMinutes": 60,
+  "capacityRetryAttempts": 2,
+  "capacityRetryDelaySeconds": 15,
   "retainRawEvents": false,
   "keepWorkerWorktrees": false,
   "autoInstallProjectDependencies": true,

@@ -56,14 +56,13 @@ async function main() {
 
     const request = (method, params = {}) => new Promise((resolve, reject) => {
       const id = nextId++;
-      pending.set(id, { resolve, reject });
-      child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
       const timeout = setTimeout(() => {
         if (pending.delete(id)) reject(new Error(`MCP timeout for ${method}. stderr=${stderr}`));
       }, 5000);
       const wrappedResolve = (value) => { clearTimeout(timeout); resolve(value); };
       const wrappedReject = (error) => { clearTimeout(timeout); reject(error); };
       pending.set(id, { resolve: wrappedResolve, reject: wrappedReject });
+      child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
     });
 
     const initialize = await request('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'smoke', version: '1' } });

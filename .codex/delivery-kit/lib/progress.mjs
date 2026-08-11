@@ -109,6 +109,13 @@ export function renderProgressLine(event, { verbose = false, repo = null } = {})
         `duration=${duration(event.durationMs)}`,
         verbose ? usageSummary(event.usage) : '',
       ]);
+    case 'codex.run.retry':
+      return details([
+        `[agent] ${event.label} retrying`,
+        `reason=${event.reason ?? 'transient failure'}`,
+        `attempt=${event.nextAttempt ?? 2}/${event.totalAttempts ?? 2}`,
+        event.delayMs ? `delay=${duration(event.delayMs)}` : '',
+      ]);
     case 'codex.result.invalid':
       return `[agent] ${event.label} invalid-result ${event.error ?? ''}`.trim();
     case 'item.started':

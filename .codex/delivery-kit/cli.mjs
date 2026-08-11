@@ -133,6 +133,8 @@ export const DEFAULT_CONFIG = {
   maxParallel: 4,
   maxRepairs: 2,
   timeoutMinutes: 60,
+  capacityRetryAttempts: 2,
+  capacityRetryDelaySeconds: 15,
   retainRawEvents: false,
   keepWorkerWorktrees: false,
   autoInstallProjectDependencies: true,
@@ -712,6 +714,8 @@ async function codexStep({ repo, state, config, label, role, prompt, schema, cwd
     reasoningEffort: roleReasoning(config, phase),
     timeoutMs: config.timeoutMinutes * 60 * 1000,
     retainRaw: config.retainRawEvents,
+    maxCapacityRetries: config.capacityRetryAttempts,
+    capacityRetryDelayMs: Number(config.capacityRetryDelaySeconds) * 1000,
   });
 }
 
@@ -1393,12 +1397,21 @@ function projectDependencyRepairApprovedFromContext(context) {
   });
 }
 
+export async function projectDependencySetupApprovalContext(repo, state) {
+  for (const review of [...(state.humanReviews ?? [])].reverse()) {
+    const full = await readHumanReviewArtifact(repo, review);
+    const context = full
+      ? buildHumanRepairContext(full, { includeProjectDependencyEnvironment: true })
+      : review?.repairContext;
+    if (projectDependencyRepairApprovedFromContext(context)) return context;
+  }
+  return null;
+}
+
 async function projectDependencySetupApproved(repo, state, config) {
   if (!config.autoInstallProjectDependencies) return { approved: false, reason: 'disabled by config' };
-  const context = await humanRepairContextForState(repo, state);
-  if (!projectDependencyRepairApprovedFromContext(context)) {
-    return { approved: false, reason: 'no human-approved project dependency repair request' };
-  }
+  const context = await projectDependencySetupApprovalContext(repo, state);
+  if (!context) return { approved: false, reason: 'no human-approved project dependency repair request' };
   return { approved: true, reason: `human review ${context.reviewId} approved project dependency repair`, context };
 }
 

@@ -1,7 +1,11 @@
 import { spawn } from 'node:child_process';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { setTimeout as delay } from 'node:timers/promises';
 import path from 'node:path';
 import { appendEvent, collectUsage, ensureDir, parseJsonResult, redactText, sanitizeEvent, sha256 } from './core.mjs';
+
+const MAX_CAPTURE_BYTES = 4 * 1024 * 1024;
+const MODEL_CAPACITY_PATTERN = /selected model is at capacity/i;
 
 export async function codexAvailable(binary = 'codex') {
   return new Promise((resolve) => {
@@ -25,6 +29,21 @@ function signalProcessTree(child, signal) {
   }
 }
 
+function appendCaptured(current, value) {
+  const next = current + value;
+  return next.length > MAX_CAPTURE_BYTES ? next.slice(-MAX_CAPTURE_BYTES) : next;
+}
+
+function isModelCapacityFailure({ code, timedOut, stderr, events }) {
+  if (code === 0 || timedOut) return false;
+  return MODEL_CAPACITY_PATTERN.test(`${stderr}\n${JSON.stringify(events)}`);
+}
+
+function retryCount(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : fallback;
+}
+
 export async function runCodex({
   binary = 'codex',
   cwd,
@@ -42,6 +61,8 @@ export async function runCodex({
   timeoutMs = 60 * 60 * 1000,
   retainRaw = false,
   extraConfig = [],
+  maxCapacityRetries = 2,
+  capacityRetryDelayMs = 15_000,
 }) {
   await ensureDir(outputDir);
   const finalPath = path.join(outputDir, 'final.json');
@@ -63,6 +84,8 @@ export async function runCodex({
     reasoningEffort,
     timeoutMs,
     retainRaw,
+    maxCapacityRetries,
+    capacityRetryDelayMs,
     promptPath: path.basename(promptPath),
     promptHash,
     promptLength: prompt.length,
@@ -95,83 +118,118 @@ export async function runCodex({
   const startedAt = Date.now();
   const events = [];
   let stderr = '';
-  let stdoutBuffer = '';
   let raw = '';
   let timedOut = false;
+  let result = { code: -1, signal: null };
+  const attempts = [];
+  const retryLimit = retryCount(maxCapacityRetries, 2);
+  const retryDelayMs = retryCount(capacityRetryDelayMs, 15_000);
 
-  const result = await new Promise((resolve, reject) => {
-    const child = spawn(binary, args, {
-      cwd,
-      detached: process.platform !== 'win32',
-      env: {
-        ...process.env,
-        CODEX_DELIVERY_RUN_ID: state.runId,
-        CODEX_DELIVERY_ROOT: repoRoot,
-        CODEX_DELIVERY_ROLE: role,
-        CODEX_DELIVERY_WORKSTREAM: workstreamId ?? '',
-      },
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-    const consumeLine = async (line) => {
-      const trimmed = line.trim();
-      if (!trimmed) return;
-      if (retainRaw) raw += `${trimmed}\n`;
-      try {
-        const event = JSON.parse(trimmed);
-        events.push(event);
-        await appendEvent(repoRoot, state, {
-          ...sanitizeEvent(event),
-          label,
-          role,
-          workstreamId,
-        });
-      } catch {
-        await appendEvent(repoRoot, state, {
-          type: 'codex.output.unparsed',
-          label,
-          role,
-          workstreamId,
-          preview: redactText(trimmed, 500),
-        });
-      }
-    };
-    let chain = Promise.resolve();
-    child.stdout.on('data', (chunk) => {
-      stdoutBuffer += chunk.toString();
-      const lines = stdoutBuffer.split(/\r?\n/);
-      stdoutBuffer = lines.pop() ?? '';
-      for (const line of lines) chain = chain.then(() => consumeLine(line));
-    });
-    child.stderr.on('data', (chunk) => {
-      stderr += chunk.toString();
-      if (stderr.length > 4 * 1024 * 1024) stderr = stderr.slice(-4 * 1024 * 1024);
-    });
-    child.on('error', reject);
-    let killTimer = null;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      signalProcessTree(child, 'SIGTERM');
-      killTimer = setTimeout(() => signalProcessTree(child, 'SIGKILL'), 5000);
-      killTimer.unref();
-    }, timeoutMs);
-    child.on('close', async (code, signal) => {
-      clearTimeout(timer);
-      if (killTimer) clearTimeout(killTimer);
-      if (process.platform !== 'win32') {
+  for (let attemptIndex = 0; attemptIndex <= retryLimit; attemptIndex += 1) {
+    let attemptStderr = '';
+    let stdoutBuffer = '';
+    let attemptTimedOut = false;
+    const attemptEvents = [];
+    result = await new Promise((resolve, reject) => {
+      const child = spawn(binary, args, {
+        cwd,
+        detached: process.platform !== 'win32',
+        env: {
+          ...process.env,
+          CODEX_DELIVERY_RUN_ID: state.runId,
+          CODEX_DELIVERY_ROOT: repoRoot,
+          CODEX_DELIVERY_ROLE: role,
+          CODEX_DELIVERY_WORKSTREAM: workstreamId ?? '',
+        },
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      const consumeLine = async (line) => {
+        const trimmed = line.trim();
+        if (!trimmed) return;
+        if (retainRaw) raw += `${trimmed}\n`;
         try {
-          signalProcessTree(child, 'SIGTERM');
+          const event = JSON.parse(trimmed);
+          events.push(event);
+          attemptEvents.push(event);
+          await appendEvent(repoRoot, state, {
+            ...sanitizeEvent(event),
+            label,
+            role,
+            workstreamId,
+          });
         } catch {
-          // Best-effort cleanup for helper descendants that survived codex exit.
+          await appendEvent(repoRoot, state, {
+            type: 'codex.output.unparsed',
+            label,
+            role,
+            workstreamId,
+            preview: redactText(trimmed, 500),
+          });
         }
-      }
-      if (stdoutBuffer.trim()) chain = chain.then(() => consumeLine(stdoutBuffer));
-      await chain;
-      resolve({ code: code ?? -1, signal });
+      };
+      let chain = Promise.resolve();
+      child.stdout.on('data', (chunk) => {
+        stdoutBuffer += chunk.toString();
+        const lines = stdoutBuffer.split(/\r?\n/);
+        stdoutBuffer = lines.pop() ?? '';
+        for (const line of lines) chain = chain.then(() => consumeLine(line));
+      });
+      child.stderr.on('data', (chunk) => {
+        attemptStderr = appendCaptured(attemptStderr, chunk.toString());
+      });
+      child.on('error', reject);
+      let killTimer = null;
+      const timer = setTimeout(() => {
+        attemptTimedOut = true;
+        signalProcessTree(child, 'SIGTERM');
+        killTimer = setTimeout(() => signalProcessTree(child, 'SIGKILL'), 5000);
+        killTimer.unref();
+      }, timeoutMs);
+      child.on('close', async (code, signal) => {
+        clearTimeout(timer);
+        if (killTimer) clearTimeout(killTimer);
+        if (process.platform !== 'win32') {
+          try {
+            signalProcessTree(child, 'SIGTERM');
+          } catch {
+            // Best-effort cleanup for helper descendants that survived codex exit.
+          }
+        }
+        if (stdoutBuffer.trim()) chain = chain.then(() => consumeLine(stdoutBuffer));
+        await chain;
+        resolve({ code: code ?? -1, signal });
+      });
+      child.stdin.end(prompt);
     });
-    child.stdin.end(prompt);
-  });
 
-  await writeFile(stderrPath, redactText(stderr, 4 * 1024 * 1024), 'utf8');
+    timedOut = attemptTimedOut;
+    stderr = appendCaptured(stderr, `${stderr ? '\n' : ''}[attempt ${attemptIndex + 1}]\n${attemptStderr}`);
+    const capacityFailure = isModelCapacityFailure({ code: result.code, timedOut, stderr: attemptStderr, events: attemptEvents });
+    attempts.push({
+      number: attemptIndex + 1,
+      exitCode: result.code,
+      signal: result.signal,
+      timedOut,
+      modelCapacity: capacityFailure,
+    });
+    if (!capacityFailure || attemptIndex === retryLimit) break;
+
+    const delayMs = retryDelayMs * (2 ** attemptIndex);
+    await appendEvent(repoRoot, state, {
+      type: 'codex.run.retry',
+      label,
+      role,
+      workstreamId,
+      attempt: attemptIndex + 1,
+      nextAttempt: attemptIndex + 2,
+      totalAttempts: retryLimit + 1,
+      delayMs,
+      reason: 'selected model is at capacity',
+    });
+    if (delayMs > 0) await delay(delayMs);
+  }
+
+  await writeFile(stderrPath, redactText(stderr, MAX_CAPTURE_BYTES), 'utf8');
   if (retainRaw) await writeFile(rawPath, raw, 'utf8');
 
   let finalText = '';
@@ -202,6 +260,7 @@ export async function runCodex({
     timedOut,
     durationMs,
     usage,
+    attempts,
     finalHash: finalText ? sha256(finalText) : null,
   });
   await writeFile(responsePath, JSON.stringify({
@@ -211,6 +270,7 @@ export async function runCodex({
     timedOut,
     durationMs,
     usage,
+    attempts,
     finalPath: path.basename(finalPath),
     stderrPath: path.basename(stderrPath),
     rawPath: retainRaw ? path.basename(rawPath) : null,
@@ -223,6 +283,7 @@ export async function runCodex({
     timedOut,
     durationMs,
     usage,
+    attempts,
     threadId: events.find((event) => event.type === 'thread.started')?.thread_id ?? null,
     events,
     final,

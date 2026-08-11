@@ -67,6 +67,12 @@ model = "<доступная Codex model>"
 
 Timeout одного Codex role turn и validation command.
 
+### capacityRetryAttempts и capacityRetryDelaySeconds
+
+Кратковременная ошибка Codex `Selected model is at capacity` повторяется автоматически. По умолчанию harness делает до двух повторов с задержками 15 и 30 секунд. Другие ошибки, неверный JSON result и timeout не повторяются автоматически.
+
+Установите `capacityRetryAttempts: 0`, чтобы отключить это поведение, или увеличьте значения для нестабильного времени высокой нагрузки.
+
 ### retainRawEvents
 
 При `false` сохраняется sanitized journal, per-agent `prompt.txt`, `request.json`, `response.json`, `final.json` и worker snapshots. При `true` дополнительно сохраняется raw Codex JSONL.

@@ -12,6 +12,8 @@ import {
   renderActiveDeliveryWarning,
   safeValidationCommand,
 } from '../.codex/delivery-kit/cli.mjs';
+import { runCodex } from '../.codex/delivery-kit/lib/codex-runner.mjs';
+import { createInitialState } from '../.codex/delivery-kit/lib/core.mjs';
 import { createWorktree, git, removeWorktree, runProcess } from '../.codex/delivery-kit/lib/git.mjs';
 import { renderProgressLine } from '../.codex/delivery-kit/lib/progress.mjs';
 
@@ -73,6 +75,13 @@ schema=pathlib.Path(value('--output-schema')).name
 out=pathlib.Path(value('--output-last-message'))
 cwd=pathlib.Path(value('--cd'))
 prompt=sys.stdin.read()
+capacity_marker=os.environ.get('CODEX_SMOKE_CAPACITY_MARKER')
+if capacity_marker:
+    marker=pathlib.Path(capacity_marker)
+    if not marker.exists():
+        marker.write_text('retry')
+        print('Selected model is at capacity. Please try a different model.', file=sys.stderr)
+        sys.exit(75)
 if 'Stop background smoke' in prompt:
     time.sleep(30)
 if schema=='worker.schema.json' and 'Timeout worker smoke' in prompt:
@@ -219,6 +228,42 @@ const legacyManagedConfig = mergeConfig(DEFAULT_CONFIG, {
 assert.equal(safeValidationCommand('docker compose config --quiet', legacyManagedConfig), true);
 const customConfig = mergeConfig(DEFAULT_CONFIG, { allowedValidationPrefixes: ['node scripts/'] });
 assert.equal(safeValidationCommand('docker compose config --quiet', customConfig), false);
+
+const capacityRetryRunId = 'capacity-retry-run';
+const capacityRetryState = createInitialState({
+  runId: capacityRetryRunId,
+  objective: 'Retry after transient model capacity',
+  repoRoot: repo,
+  baseRef: 'main',
+  baseCommit: 'HEAD',
+});
+const capacityMarker = path.join(temp, 'capacity-retry.marker');
+const previousCapacityMarker = process.env.CODEX_SMOKE_CAPACITY_MARKER;
+process.env.CODEX_SMOKE_CAPACITY_MARKER = capacityMarker;
+try {
+  const capacityRetry = await runCodex({
+    binary: fakeCodex,
+    cwd: repo,
+    prompt: 'Capacity retry smoke',
+    schemaPath: path.join(kitRoot, 'delivery', 'schemas', 'review.schema.json'),
+    outputDir: path.join(repo, '.codex', 'delivery-runs', capacityRetryRunId, 'agents', 'capacity-retry'),
+    repoRoot: repo,
+    state: capacityRetryState,
+    label: 'capacity-retry',
+    role: 'reviewer',
+    maxCapacityRetries: 1,
+    capacityRetryDelayMs: 1,
+  });
+  assert.equal(capacityRetry.ok, true);
+  assert.equal(capacityRetry.attempts.length, 2);
+  assert.equal(capacityRetry.attempts[0].modelCapacity, true);
+  assert.equal(capacityRetry.attempts[1].modelCapacity, false);
+  const capacityEvents = await readFile(path.join(repo, '.codex', 'delivery-runs', capacityRetryRunId, 'events.jsonl'), 'utf8');
+  assert.match(capacityEvents, /"type":"codex.run.retry"/);
+} finally {
+  if (previousCapacityMarker === undefined) delete process.env.CODEX_SMOKE_CAPACITY_MARKER;
+  else process.env.CODEX_SMOKE_CAPACITY_MARKER = previousCapacityMarker;
+}
 
 const staleWarningRun = 'stale-warning-run';
 await mkdir(path.join(activeWarningRepo, '.codex', 'delivery-runs', staleWarningRun), { recursive: true });
