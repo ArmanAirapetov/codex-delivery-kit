@@ -83,9 +83,14 @@ Foreground `run` и `resume` рендерят concise sanitized progress в stde
 ./scripts/codex-delivery logs --follow --run <run-id>
 ./scripts/codex-delivery logs --follow --tail 30 --run <run-id>
 ./scripts/codex-delivery logs --follow --all --run <run-id>
+./scripts/codex-delivery tui --run <run-id>
+./scripts/codex-delivery status --run <run-id> --tui
+./scripts/codex-delivery review --run <run-id> --tui
 ```
 
 `logs` читает `events.jsonl` и применяет тот же renderer. Plain `logs` выводит весь history; `logs --follow` по умолчанию начинает с последних 80 event records, чтобы длинные resume chains не скрывали current process. `--tail <n>` задаёт другое окно, `--all` возвращает полный history перед follow. Normal output показывает high-level phases, sanitized command starts, file-change counts, agent message lengths and background heartbeats, so a long-running agent does not look silent. It still does not include prompt text, agent message text or raw JSONL. `--verbose` adds sanitized paths, command completions, duration and token totals.
+
+`tui`, `status --tui` and `review --tui` are dependency-free terminal views over the same `state.json`, `summary.md`, `events.jsonl` and human-review inbox. The TUI does not create a second audit stream: saving review decisions emits the same `human.review.recorded` event and the same `human-reviews.jsonl` / `artifacts/human-reviews/*.json` records as guided `review`. TUI mode requires an interactive TTY; non-TTY automation should use plain commands or `--json`.
 
 ## 4. Sanitized Codex and hook records
 
@@ -123,7 +128,7 @@ Worker generations дополнительно архивируются в `artif
 
 Strict worker checks can include non-blocking failed entries. The harness logs `workstream.checks.nonblocking` when a failed check is a strict-mode workflow helper, dependency provisioning attempt, or a declared local validation command that could not run because the tool itself is unavailable. These records remain in `state.json` and agent `final.json`; the final validation gate still decides whether the integrated repository is acceptable.
 
-Human review decisions are durable run artifacts. `review --json` emits the computed inbox without writing. Interactive `review` appends compact records to `human-reviews.jsonl`, writes full snapshots to `artifacts/human-reviews/*.json`, stores compact refs/counts in `state.humanReviews`, updates `summary.md`, and emits `human.review.recorded`. Only decisions marked `repair_requested` are passed into the next repair-planning prompt.
+Human review decisions are durable run artifacts. `review --json` emits the computed inbox without writing. Interactive `review` and `review --tui` append compact records to `human-reviews.jsonl`, write full snapshots to `artifacts/human-reviews/*.json`, store compact refs/counts in `state.humanReviews`, update `summary.md`, and emit `human.review.recorded`. Only decisions marked `repair_requested` are passed into the next repair-planning prompt.
 
 Background runs дополнительно пишут:
 

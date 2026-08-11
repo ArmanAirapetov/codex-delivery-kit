@@ -38,6 +38,18 @@
 - proof metrics;
 - result linkage.
 
+### TUI smoke
+
+Проверяет dependency-free terminal UI without a real terminal:
+
+- pure Overview, Events, Checkpoints and Review rendering;
+- color/no-color rendering paths;
+- keyboard reducer for panels, movement, decisions and notes;
+- non-TTY rejection;
+- `status --tui`, `tui --panel events` and `review --tui`;
+- alternate-screen enter/restore and raw-mode cleanup;
+- durable human-review artifact persistence from the TUI save action.
+
 ### Workflow smoke
 
 Полный offline test:
@@ -72,6 +84,8 @@ node scripts/mcp-smoke.mjs
 node scripts/hook-smoke.mjs
 node scripts/install-smoke.mjs
 node scripts/analyzer-smoke.mjs
+node scripts/review-smoke.mjs
+node scripts/tui-smoke.mjs
 node scripts/workflow-smoke.mjs
 ```
 

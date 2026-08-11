@@ -52,6 +52,7 @@ async function main() {
     assert.equal((ignore.match(/CODEX DELIVERY KIT BEGIN/g) ?? []).length, 1);
 
     await readFile(path.join(temp, '.codex', 'delivery-kit', 'cli.mjs'), 'utf8');
+    await readFile(path.join(temp, 'scripts', 'tui-smoke.mjs'), 'utf8');
     await readFile(path.join(temp, 'docs', 'codex-delivery', 'SYSTEM.md'), 'utf8');
     console.log('install-smoke: OK');
   } finally {

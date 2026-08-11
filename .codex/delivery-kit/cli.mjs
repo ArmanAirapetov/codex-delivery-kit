@@ -59,6 +59,7 @@ import {
   workerPrompt,
 } from './lib/prompts.mjs';
 import { createProgressLogger, isTerminalProgressEvent, renderProgressLine } from './lib/progress.mjs';
+import { runTerminalTui } from './lib/tui.mjs';
 
 const KIT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SCHEMA_ROOT = path.join(KIT_ROOT, 'delivery', 'schemas');
@@ -78,6 +79,7 @@ const BOOLEAN_OPTIONS = new Set([
   'noAutoInstallDeps',
   'quiet',
   'raw',
+  'tui',
   'verbose',
 ]);
 const BACKGROUND_TERMINAL_STATUSES = new Set(['exited', 'failed', 'stopped']);
@@ -2376,6 +2378,9 @@ export async function reviewCommand(options, { inputStream = process.stdin, outp
     outputStream.write(`${JSON.stringify(inbox, null, 2)}\n`);
     return inbox;
   }
+  if (options.tui) {
+    return tuiCommand(options, { inputStream, outputStream, initialPanel: 'review' });
+  }
   if (!['blocked', 'failed'].includes(state.phase)) {
     throw new UserFacingError(`Run ${runId} is in phase '${state.phase}'. Human review decisions can be recorded only for blocked or failed runs. Use review --json for read-only inspection.`);
   }
@@ -2429,6 +2434,95 @@ export async function reviewCommand(options, { inputStream = process.stdin, outp
   }
   outputStream.write(`${lines.join('\n')}\n`);
   return session;
+}
+
+async function readRunEventHistory(repo, runId, limit = 300) {
+  const eventsPath = runPaths(repo, runId).events;
+  let text = '';
+  try {
+    text = await readFile(eventsPath, 'utf8');
+  } catch (error) {
+    if (error?.code === 'ENOENT') return [];
+    throw error;
+  }
+  return text
+    .split(/\r?\n/)
+    .filter((line) => line.trim())
+    .slice(-limit)
+    .flatMap((line) => {
+      try {
+        return [JSON.parse(line)];
+      } catch {
+        return [];
+      }
+    });
+}
+
+function buildTuiReviewSession({ state, inbox, model }) {
+  const decisions = (inbox.items ?? []).map((item) => ({
+    ...reviewItemDecisionSeed(item),
+    itemId: item.id,
+    decision: model.decisions?.[item.id] ?? item.defaultDecision,
+    defaultDecision: item.defaultDecision,
+    note: redactText(model.notes?.[item.id] ?? '', 2000).trim(),
+  }));
+  return {
+    id: `HR-${snapshotStamp()}`,
+    at: now(),
+    runId: state.runId,
+    phase: state.phase,
+    objective: state.objective,
+    baseCommit: state.baseCommit,
+    integrationCommit: state.integration?.commit ?? null,
+    repairIteration: state.repairIteration ?? 0,
+    maxRepairs: state.maxRepairs ?? DEFAULT_CONFIG.maxRepairs,
+    recommendedMaxRepairs: inbox.recommendedMaxRepairs,
+    items: inbox.items,
+    decisions,
+    counts: decisionCounts(decisions),
+  };
+}
+
+export async function tuiCommand(options, { inputStream = process.stdin, outputStream = process.stdout, initialPanel = options.panel ?? 'overview' } = {}) {
+  const repo = await repositoryRootFor(await repoCwdFromOptions(options));
+  const runId = options.run || await latestRunId(repo);
+  if (!runId) throw new Error('No delivery run selected.');
+
+  const load = async () => {
+    const state = await loadState(repo, runId);
+    const background = await readBackgroundRecord(repo, runId);
+    const inbox = await buildHumanReviewInbox(repo, state, { background });
+    const events = await readRunEventHistory(repo, runId);
+    return { repo, runId, state, background, inbox, events };
+  };
+
+  const saveReview = async (model) => {
+    const state = await loadState(repo, runId);
+    if (!['blocked', 'failed'].includes(state.phase)) {
+      throw new UserFacingError(`Run ${runId} is in phase '${state.phase}'. Review decisions can be saved only for blocked or failed runs.`);
+    }
+    const background = await readBackgroundRecord(repo, runId);
+    const inbox = await buildHumanReviewInbox(repo, state, { background });
+    if (!inbox.items.length) throw new UserFacingError(`Run ${runId} has no human review inbox items.`);
+    const session = buildTuiReviewSession({ state, inbox, model });
+    const recorded = await recordHumanReview(repo, state, session);
+    const dirty = await meaningfulStatusEntries(repo);
+    const allowDirtyHint = dirty.length ? ' Repository has uncommitted changes; resume may need --allow-dirty.' : '';
+    return {
+      session,
+      artifactPath: recorded.artifactPath,
+      message: `Human review saved: ${recorded.artifactPath}. Resume: ${resumeCommandForReview(runId, inbox.recommendedMaxRepairs)}.${allowDirtyHint}`,
+    };
+  };
+
+  return runTerminalTui({
+    inputStream,
+    outputStream,
+    load,
+    saveReview,
+    initialPanel,
+    noColor: Boolean(options.noColor),
+  });
 }
 
 function statusJsonPayload(repo, runId, state, background) {
@@ -2486,7 +2580,7 @@ function statusJsonPayload(repo, runId, state, background) {
   };
 }
 
-export async function statusCommand(options, { outputStream = process.stdout } = {}) {
+export async function statusCommand(options, { inputStream = process.stdin, outputStream = process.stdout } = {}) {
   const repo = await repositoryRootFor(await repoCwdFromOptions(options));
   const runId = options.run || await latestRunId(repo);
   if (!runId) throw new Error('No delivery runs found.');
@@ -2495,6 +2589,9 @@ export async function statusCommand(options, { outputStream = process.stdout } =
   if (options.json) {
     outputStream.write(`${JSON.stringify(statusJsonPayload(repo, runId, state, background), null, 2)}\n`);
     return state;
+  }
+  if (options.tui) {
+    return tuiCommand(options, { inputStream, outputStream, initialPanel: 'overview' });
   }
   let output = `${await readFile(runPaths(repo, runId).summary, 'utf8')}\n`;
   if (background) {
@@ -2716,7 +2813,10 @@ Usage:
   node .codex/delivery-kit/cli.mjs resume [--repo <path>] [--run <id>] [options]
   node .codex/delivery-kit/cli.mjs logs [--repo <path>] [--run <id>] [--follow] [--tail <n>] [--all] [--verbose]
   node .codex/delivery-kit/cli.mjs review [--repo <path>] [--run <id>] [--json]
+  node .codex/delivery-kit/cli.mjs review [--repo <path>] [--run <id>] --tui
   node .codex/delivery-kit/cli.mjs status [--repo <path>] [--run <id>] [--json]
+  node .codex/delivery-kit/cli.mjs status [--repo <path>] [--run <id>] --tui
+  node .codex/delivery-kit/cli.mjs tui [--repo <path>] [--run <id>] [--panel overview|events|checkpoints|review]
   node .codex/delivery-kit/cli.mjs report [--repo <path>] [--run <id>]
   node .codex/delivery-kit/cli.mjs stop [--repo <path>] [--run <id>]
   node .codex/delivery-kit/cli.mjs cleanup [--repo <path>] [--run <id>] [--integration] [--logs]
@@ -2732,6 +2832,8 @@ Run/resume options:
   --tail <n>            Show only the last n event records before exiting or following
   --all                 With logs --follow, print full history before following
   --json                Print machine-readable output for review/status
+  --tui                 Open the interactive terminal UI for status or review
+  --panel <name>        Initial TUI panel: overview, events, checkpoints, review
   --quiet               Suppress live progress output
   --verbose             Print additional sanitized progress details
   --no-color            Disable colorized terminal output
@@ -2769,6 +2871,8 @@ async function main() {
     process.stdout.write(`${JSON.stringify(final, null, 2)}\n`);
   } else if (command === 'logs') {
     await logsCommand(options);
+  } else if (command === 'tui') {
+    await tuiCommand(options);
   } else if (command === 'review') {
     await reviewCommand(options);
   } else if (command === 'status') {

@@ -63,6 +63,7 @@ scripts/
 ├── install-smoke.mjs
 ├── analyzer-smoke.mjs
 ├── review-smoke.mjs
+├── tui-smoke.mjs
 ├── workflow-smoke.mjs
 └── smoke-test.sh
 docs/
@@ -140,8 +141,11 @@ Strict harness стартует только из чистого Git состо�
 ./scripts/codex-delivery logs --follow --all --run <run-id>
 ./scripts/codex-delivery review --run <run-id>
 ./scripts/codex-delivery review --run <run-id> --json
+./scripts/codex-delivery review --run <run-id> --tui
 ./scripts/codex-delivery status
 ./scripts/codex-delivery status --json
+./scripts/codex-delivery status --run <run-id> --tui
+./scripts/codex-delivery tui --run <run-id>
 ./scripts/codex-delivery report
 ./scripts/codex-delivery stop --run <run-id>
 ./scripts/codex-delivery cleanup --integration
@@ -159,7 +163,9 @@ Background режим сразу возвращает `runId`, `pid` и пути
 
 `logs --follow` по умолчанию выводит последние 80 event records и затем live progress; `--tail <n>` задаёт другое окно, `--all` печатает всю историю перед follow. Normal output показывает sanitized command starts, file-change counts, agent message lengths и background heartbeats, поэтому долгий agent не выглядит зависшим. Plain `logs` без `--follow` остаётся forensic full-history view.
 
-Если run остановился на `Human review is required`, используйте `review --run <run-id>` для guided terminal review. Команда собирает inbox из failed validation commands, непроверенных acceptance criteria и blocking review findings, показывает action descriptions и suggested action для каждого пункта, сохраняет decisions только внутри `.codex/delivery-runs/<run-id>/` и печатает безопасную команду resume. Missing project dependencies such as `pytest`, `tsc`, Vite or Vitest default to `repair_requested`, meaning the operator approves Codex to fix requirements/package manifests and lets resume prepare checked-in Python/npm dependencies before validation. Missing system tools, services or credentials default to `environment_required`. Interactive output использует цвета в TTY; `--no-color` или `NO_COLOR=1` отключают ANSI. `review --json` работает read-only на любой фазе и удобен для внешнего UI.
+Если run остановился на `Human review is required`, используйте `review --run <run-id>` для guided terminal review или `review --tui --run <run-id>` для панели Overview/Events/Checkpoints/Review. Оба режима собирают inbox из failed validation commands, непроверенных acceptance criteria и blocking review findings, показывают action descriptions и suggested action для каждого пункта, сохраняют decisions только внутри `.codex/delivery-runs/<run-id>/` и печатают безопасную команду resume. Missing project dependencies such as `pytest`, `tsc`, Vite or Vitest default to `repair_requested`, meaning the operator approves Codex to fix requirements/package manifests and lets resume prepare checked-in Python/npm dependencies before validation. Missing system tools, services or credentials default to `environment_required`. Interactive output использует цвета в TTY; `--no-color` или `NO_COLOR=1` отключают ANSI. `review --json` работает read-only на любой фазе и удобен для внешнего UI.
+
+`tui --run <run-id>` открывает dependency-free terminal UI для live monitor and checkpoint review. `status --tui` starts on Overview, `review --tui` starts on Review. Keys: `1-4` panels, `j/k` or arrows move, `Enter` accepts the suggested action, `r/e/m/a` set review action, `n` edits a note, `s` saves decisions, `q` exits.
 
 Несколько background runs в одном repository разрешены; каждый run получает собственные worktrees и run artifacts. Для одного и того же run повторный background resume отклоняется, если прежний background process ещё жив.
 Если в repository уже есть active delivery process, новый `run`/`resume` печатает notice в stderr с `runId`, `pid` и командой `logs --follow`. Это предупреждение не блокирует отдельный новый run, но same-run duplicate background resume остаётся ошибкой.
@@ -244,6 +250,6 @@ node .codex/delivery-kit/analyze-runs.mjs --run <run-id> --json
 ./scripts/smoke-test.sh
 ```
 
-Набор тестов отдельно проверяет MCP и lifecycle hooks. End-to-end smoke test использует fake Codex CLI, реальный временный Git-репозиторий, две параллельные writer-ветки, cherry-pick integration, validation, verification и review. Сетевые/API-вызовы не нужны.
+Набор тестов отдельно проверяет MCP, lifecycle hooks, guided review and TUI mode. End-to-end smoke test использует fake Codex CLI, реальный временный Git-репозиторий, две параллельные writer-ветки, cherry-pick integration, validation, verification и review. Сетевые/API-вызовы не нужны.
 
 Подробная архитектура: [docs/SYSTEM.md](docs/SYSTEM.md).
