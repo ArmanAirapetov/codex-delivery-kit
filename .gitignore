@@ -1,5 +1,6 @@
 .codex/delivery-runs/
 .codex/delivery-kit/node_modules/
+.codex/delivery-kit/web/node_modules/
 .codex/delivery-kit/web/dist/
 .codex/hook-events/
 .codex-delivery-backups/

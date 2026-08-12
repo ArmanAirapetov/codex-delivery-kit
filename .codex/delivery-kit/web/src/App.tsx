@@ -261,9 +261,45 @@ function RunList({ runs, selectedRunId, onSelect }: { runs: RunSummary[]; select
             </span>
           </button>
         ))}
-        {!runs.length && <div className="empty">No delivery runs found.</div>}
+        {!runs.length && <div className="empty">No valid delivery runs found.</div>}
       </div>
     </aside>
+  );
+}
+
+function EmptyRuns({ onRefresh }: { onRefresh: () => void }) {
+  return (
+    <div className="empty-page">
+      <div className="empty-card">
+        <TerminalSquare size={22} />
+        <h1>No delivery runs yet</h1>
+        <p>This Web UI manages existing Codex Delivery runs for the current repository.</p>
+        <div className="command-box">
+          <code>./scripts/codex-delivery run "Describe the project change" --background</code>
+          <code>./scripts/codex-delivery web</code>
+        </div>
+        <button className="button primary" onClick={onRefresh}>
+          <RefreshCw size={16} />
+          Refresh
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function RunLoadError({ message, onRefresh }: { message: string; onRefresh: () => void }) {
+  return (
+    <div className="empty-page">
+      <div className="empty-card">
+        <AlertTriangle size={22} />
+        <h1>Run could not be loaded</h1>
+        <p>{message}</p>
+        <button className="button primary" onClick={onRefresh}>
+          <RefreshCw size={16} />
+          Refresh
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -533,13 +569,18 @@ function Dashboard({ token }: { token: string }) {
 
   if (runsQuery.isLoading) return <div className="loading">Loading runs...</div>;
   if (runsQuery.error) return <div className="auth-empty">{runsQuery.error.message}</div>;
+  const runs = runsQuery.data?.runs ?? [];
 
   return (
     <Tooltip.Provider delayDuration={250}>
       <div className="app-shell">
-        <RunList runs={runsQuery.data?.runs ?? []} selectedRunId={selected} onSelect={setSelectedRunId} />
+        <RunList runs={runs} selectedRunId={selected} onSelect={setSelectedRunId} />
         <main className="main">
-          {runQuery.data ? (
+          {!runs.length ? (
+            <EmptyRuns onRefresh={() => void queryClient.invalidateQueries({ queryKey: ['runs'] })} />
+          ) : runQuery.error ? (
+            <RunLoadError message={runQuery.error.message} onRefresh={() => void queryClient.invalidateQueries({ queryKey: ['run', selected] })} />
+          ) : runQuery.data ? (
             <>
               <TopStrip run={runQuery.data} onRefresh={() => void queryClient.invalidateQueries({ queryKey: ['run', selected] })} />
               <Tabs.Root defaultValue="cockpit" className="tabs">
@@ -558,7 +599,7 @@ function Dashboard({ token }: { token: string }) {
               </Tabs.Root>
             </>
           ) : (
-            <div className="empty-page">Select a delivery run.</div>
+            <div className="empty-page">Loading selected run...</div>
           )}
         </main>
       </div>

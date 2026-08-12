@@ -66,7 +66,9 @@ try {
     finishedAt: now(),
   };
   await mkdir(path.join(repo, '.codex', 'delivery-runs', runId, 'commands'), { recursive: true });
-  await writeFile(path.join(repo, '.codex', 'delivery-runs', 'latest'), `${runId}\n`, 'utf8');
+  await mkdir(path.join(repo, '.codex', 'delivery-runs', 'manual'), { recursive: true });
+  await writeFile(path.join(repo, '.codex', 'delivery-runs', 'manual', 'events.jsonl'), '{"type":"manual"}\n', 'utf8');
+  await writeFile(path.join(repo, '.codex', 'delivery-runs', 'latest'), 'manual\n', 'utf8');
   await writeFile(path.join(repo, '.codex', 'delivery-runs', runId, 'commands', 'validation-01.log'), 'AssertionError: web smoke failed\n', 'utf8');
   await saveState(repo, state);
   await appendEvent(repo, state, { type: 'workflow.blocked', summary: 'Validation failed.' });

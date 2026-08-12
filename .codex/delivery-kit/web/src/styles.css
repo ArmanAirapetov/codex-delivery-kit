@@ -601,6 +601,42 @@ textarea {
   place-items: center;
 }
 
+.empty-card {
+  width: min(560px, calc(100vw - 48px));
+  display: grid;
+  gap: 14px;
+  justify-items: start;
+  background: #ffffff;
+  border: 1px solid #d9e0e3;
+  border-radius: 8px;
+  padding: 22px;
+  color: #263138;
+  box-shadow: 0 16px 46px rgba(20, 31, 36, 0.08);
+}
+
+.empty-card svg {
+  color: #248a97;
+}
+
+.empty-card p {
+  color: #65747c;
+}
+
+.command-box {
+  width: 100%;
+  display: grid;
+  gap: 7px;
+}
+
+.command-box code {
+  display: block;
+  background: #162024;
+  color: #edf5f7;
+  padding: 9px 10px;
+  border-radius: 6px;
+  overflow-wrap: anywhere;
+}
+
 .error-line {
   color: #b42318;
 }

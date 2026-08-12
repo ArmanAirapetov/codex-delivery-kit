@@ -3,6 +3,7 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   root: new URL('.', import.meta.url).pathname,
+  cacheDir: '../node_modules/.vite-web-test',
   plugins: [react()],
   test: {
     environment: 'jsdom',

@@ -140,9 +140,11 @@ export async function listRuns(repo, { limit = 50 } = {}) {
   }
   runs.sort((left, right) => String(right.startedAt ?? '').localeCompare(String(left.startedAt ?? '')));
   const numericLimit = Math.max(1, Number(limit) || 50);
+  const validRunIds = new Set(runs.map((run) => run.runId));
+  const latest = await latestRunId(repo);
   return {
     repo,
-    latestRunId: await latestRunId(repo),
+    latestRunId: latest && validRunIds.has(latest) ? latest : runs[0]?.runId ?? null,
     runs: runs.slice(0, numericLimit),
   };
 }

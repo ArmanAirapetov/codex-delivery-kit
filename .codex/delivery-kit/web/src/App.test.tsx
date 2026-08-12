@@ -111,4 +111,15 @@ describe('App', () => {
       expect(fetch).toHaveBeenCalledWith('/api/runs/run-1/review', expect.objectContaining({ method: 'POST' }));
     });
   });
+
+  it('shows an actionable empty state when no runs exist', async () => {
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/runs') return jsonResponse({ runs: [], latestRunId: null });
+      return Promise.resolve(new Response(JSON.stringify({ error: 'not found' }), { status: 404 }));
+    });
+    render(<App />);
+    expect(await screen.findByRole('heading', { name: 'No delivery runs yet' })).toBeInTheDocument();
+    expect(screen.getByText('./scripts/codex-delivery run "Describe the project change" --background')).toBeInTheDocument();
+  });
 });
