@@ -119,10 +119,18 @@ button:disabled {
   padding: 16px 22px;
 }
 
+.top-main {
+  min-width: 0;
+}
+
 .title-row {
   display: flex;
   align-items: center;
   gap: 12px;
+  min-width: 0;
+}
+
+.title-row h1 {
   min-width: 0;
 }
 
@@ -159,6 +167,11 @@ h3 {
   color: #58656d;
   font-size: 13px;
   margin-top: 9px;
+}
+
+.meta-row span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .progress-cluster {
@@ -279,6 +292,11 @@ h3 {
   grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 10px;
   align-items: center;
+}
+
+.diagnostic-row > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .action-line {
@@ -406,6 +424,11 @@ h3 {
   align-items: center;
   justify-content: space-between;
   text-align: left;
+}
+
+.review-item > span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .review-item.selected {
@@ -664,11 +687,51 @@ textarea {
     display: grid;
   }
 
+  .top-main,
+  .title-row,
+  .meta-row,
+  .progress-cluster {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .title-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
   .progress-cluster {
     min-width: 0;
   }
 
   .tab-list {
     overflow-x: auto;
+  }
+
+  .review-row {
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: start;
+  }
+
+  .decision-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 520px) {
+  .tab-list {
+    height: auto;
+    min-height: 46px;
+    align-items: stretch;
+    flex-wrap: wrap;
+    gap: 2px;
+    padding: 8px 14px 0;
+    overflow-x: visible;
+  }
+
+  .tab-list button {
+    flex: 1 1 112px;
+    height: 36px;
+    padding: 0 8px;
   }
 }

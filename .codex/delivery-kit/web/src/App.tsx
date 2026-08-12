@@ -525,7 +525,7 @@ function Diagnostics({ run }: { run: RunDetail }) {
       <div className="section">
         <h2>Validation</h2>
         {(run.state.validation?.runs ?? []).map((item) => (
-          <div key={item.command} className="diagnostic-row">
+          <div key={item.command} className="diagnostic-row validation-row">
             <StatusPill tone={item.ok ? 'ok' : 'bad'}>{item.ok ? 'passed' : 'failed'}</StatusPill>
             <span>{item.command}</span>
             <span>{formatDuration(item.durationMs)}</span>
@@ -535,7 +535,7 @@ function Diagnostics({ run }: { run: RunDetail }) {
       <div className="section">
         <h2>Reviews</h2>
         {(run.state.reviews ?? []).map((item, index) => (
-          <div key={`${item.role}-${index}`} className="diagnostic-row">
+          <div key={`${item.role}-${index}`} className="diagnostic-row review-row">
             <StatusPill tone={item.verdict === 'approved' ? 'ok' : 'warn'}>{item.verdict ?? 'unknown'}</StatusPill>
             <span>{item.role ?? 'review'}</span>
             <span>{item.summary ?? ''}</span>
