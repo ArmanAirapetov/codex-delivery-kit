@@ -77,6 +77,7 @@ const BOOLEAN_OPTIONS = new Set([
   'logs',
   'noColor',
   'noAutoInstallDeps',
+  'once',
   'quiet',
   'raw',
   'tui',
@@ -2462,9 +2463,9 @@ function buildTuiReviewSession({ state, inbox, model }) {
   const decisions = (inbox.items ?? []).map((item) => ({
     ...reviewItemDecisionSeed(item),
     itemId: item.id,
-    decision: model.decisions?.[item.id] ?? item.defaultDecision,
+    decision: model.pendingDecisions?.[item.id] ?? model.decisions?.[item.id] ?? item.defaultDecision,
     defaultDecision: item.defaultDecision,
-    note: redactText(model.notes?.[item.id] ?? '', 2000).trim(),
+    note: redactText(model.pendingNotes?.[item.id] ?? model.notes?.[item.id] ?? '', 2000).trim(),
   }));
   return {
     id: `HR-${snapshotStamp()}`,
@@ -2497,7 +2498,8 @@ export async function tuiCommand(options, { inputStream = process.stdin, outputS
     const background = await readBackgroundRecord(repo, runId);
     const inbox = await buildHumanReviewInbox(repo, state, { background });
     const events = await readRunEventHistory(repo, runId);
-    return { repo, runId, state, background, inbox, events };
+    const dirtyEntries = await meaningfulStatusEntries(repo);
+    return { repo, runId, state, background, inbox, events, dirtyEntries, allowDirty: Boolean(options.allowDirty) };
   };
 
   const saveReview = async (model) => {
@@ -2519,14 +2521,34 @@ export async function tuiCommand(options, { inputStream = process.stdin, outputS
     };
   };
 
+  const resumeRun = async (model) => {
+    const state = await loadState(repo, runId);
+    if (state.phase === 'accepted') {
+      throw new UserFacingError(`Run ${runId} is already accepted; nothing to resume.`);
+    }
+    const background = await readBackgroundRecord(repo, runId);
+    const inbox = await buildHumanReviewInbox(repo, state, { background });
+    return startBackgroundResume({
+      cwd: repo,
+      options: {
+        ...options,
+        run: runId,
+        maxRepairs: inbox.recommendedMaxRepairs,
+        allowDirty: Boolean(model?.allowDirty),
+      },
+    });
+  };
+
   return runTerminalTui({
     inputStream,
     outputStream,
     load,
     saveReview,
+    resumeRun,
     initialPanel,
     viewMode,
     noColor: Boolean(options.noColor),
+    once: Boolean(options.once),
   });
 }
 
@@ -2821,7 +2843,7 @@ Usage:
   node .codex/delivery-kit/cli.mjs review [--repo <path>] [--run <id>] --tui
   node .codex/delivery-kit/cli.mjs status [--repo <path>] [--run <id>] [--json]
   node .codex/delivery-kit/cli.mjs status [--repo <path>] [--run <id>] --tui
-  node .codex/delivery-kit/cli.mjs tui [--repo <path>] [--run <id>] [--panel overview|events|checkpoints|review] [--view simple|verbose|extended]
+  node .codex/delivery-kit/cli.mjs tui [--repo <path>] [--run <id>] [--panel overview|events|checkpoints|review|workspace] [--view simple|verbose|extended] [--once]
   node .codex/delivery-kit/cli.mjs report [--repo <path>] [--run <id>]
   node .codex/delivery-kit/cli.mjs stop [--repo <path>] [--run <id>]
   node .codex/delivery-kit/cli.mjs cleanup [--repo <path>] [--run <id>] [--integration] [--logs]
@@ -2838,8 +2860,9 @@ Run/resume options:
   --all                 With logs --follow, print full history before following
   --json                Print machine-readable output for review/status
   --tui                 Open the interactive terminal UI for status or review
-  --panel <name>        Initial TUI panel: overview, events, checkpoints, review
+  --panel <name>        Initial TUI panel: overview, events, checkpoints, review, workspace
   --view <mode>         TUI detail level: simple, verbose, extended
+  --once                Render one TUI frame without requiring an interactive terminal
   --quiet               Suppress live progress output
   --verbose             Print additional sanitized progress details
   --no-color            Disable colorized terminal output

@@ -24,6 +24,7 @@ import {
   createTuiModel,
   renderTuiScreen,
   reviewDecisionCounts,
+  runTerminalTui,
   stripAnsi,
 } from '../.codex/delivery-kit/lib/tui.mjs';
 
@@ -212,7 +213,12 @@ assert.match(overview, /TUI smoke blocked delivery/);
 assert.match(overview, /Next Action/);
 assert.match(overview, /3 review items need a decision/);
 assert.match(overview, /Recommended: open Review/);
+assert.match(overview, /Review state: Not saved yet/);
+assert.match(overview, /Resume disabled: Save review decisions before resume/);
 assert.match(overview, /Validation:/);
+assert.match(overview, /Progress/);
+assert.match(overview, /Workstreams \[#+\] 2\/2/);
+assert.match(overview, /Validation\s+\[[#!-]+\] 1\/2/);
 assert.doesNotMatch(overview, /faileds|approveds|not approveds/);
 assert.equal(stripAnsi(overview), overview);
 
@@ -246,9 +252,16 @@ assert.equal(model.viewMode, 'simple');
 model = applyTuiKey(model, '3').model;
 assert.equal(model.panel, 'checkpoints');
 const checkpoints = renderTuiScreen(model, { width: 120, height: 24 });
-assert.match(checkpoints, /\[validation\] 1\/2 passed, 1 failed/);
+assert.match(checkpoints, /\[validation\] \[[#!-]+\] 1\/2 passed, 1 failed/);
+assert.match(checkpoints, /\[reviews\] \[[#!-]+\] 1\/2 approved, 1 not approved/);
 assert.match(checkpoints, /\[review\] reviewer changes_requested findings=1/);
 assert.match(checkpoints, /\[final\] blocked/);
+model = applyTuiKey(model, '5').model;
+assert.equal(model.panel, 'workspace');
+assert.match(renderTuiScreen(model, { width: 120, height: 24 }), /Working tree clean/);
+model = applyTuiKey(model, '!').model;
+assert.equal(model.allowDirty, false);
+assert.match(model.message, /clean/);
 model = applyTuiKey(model, '4').model;
 assert.equal(model.panel, 'review');
 const reviewScreen = renderTuiScreen(model, { width: 120, height: 30 });
@@ -261,21 +274,225 @@ model = applyTuiKey(model, 'k').model;
 assert.equal(model.selected.review, 0);
 model = applyTuiKey(model, 'e').model;
 assert.equal(model.decisions[inbox.items[0].id], 'environment_required');
+assert.equal(model.pendingDecisions[inbox.items[0].id], 'environment_required');
+assert.equal(model.dirty, true);
+assert.match(renderTuiScreen(model, { width: 120, height: 30 }), /Unsaved changes/);
 model = applyTuiKey(model, 'm').model;
 assert.equal(model.decisions[inbox.items[0].id], 'manual_required');
 model = applyTuiKey(model, 'a').model;
 assert.equal(model.decisions[inbox.items[0].id], 'acknowledged');
 model = applyTuiKey(model, 'r').model;
 assert.equal(model.decisions[inbox.items[0].id], 'repair_requested');
+assert.equal(model.dirty, false);
 model = applyTuiKey(model, 'A').model;
 assert.equal(reviewDecisionCounts(model).repair_requested, 3);
+assert.equal(model.reviewSaved, false);
 model = applyTuiKey(model, 'x').model;
 assert.equal(model.expandedDetails[inbox.items[0].id], true);
 model = applyTuiKey(model, 'n').model;
 for (const char of 'TUI note') model = applyTuiKey(model, char).model;
 model = applyTuiKey(model, '\r').model;
 assert.equal(model.notes[inbox.items[0].id], 'TUI note');
+assert.equal(model.pendingNotes[inbox.items[0].id], 'TUI note');
+assert.equal(model.dirty, true);
 assert.equal(reviewDecisionCounts(model).repair_requested, 3);
+
+function directReviewSessionFromModel(tuiModel, id = 'HR-tui-direct') {
+  const decisions = (tuiModel.inbox?.items ?? []).map((item) => ({
+    itemId: item.id,
+    type: item.type,
+    title: item.title,
+    decision: tuiModel.pendingDecisions?.[item.id] ?? item.defaultDecision,
+    defaultDecision: item.defaultDecision,
+    note: tuiModel.pendingNotes?.[item.id] ?? '',
+  }));
+  return {
+    session: {
+      id,
+      at: now(),
+      runId: tuiModel.runId,
+      integrationCommit: tuiModel.state?.integration?.commit ?? null,
+      decisions,
+    },
+    artifactPath: `.codex/delivery-runs/${runId}/artifacts/human-reviews/${id}.json`,
+    message: `Human review saved: ${id}.`,
+  };
+}
+
+let resumeCalls = 0;
+const directLoad = async () => ({ repo, runId, state, background: null, inbox, events });
+const resumeBeforeSave = await driveTui(
+  ({ input, output }) => runTerminalTui({
+    inputStream: input,
+    outputStream: output,
+    load: directLoad,
+    saveReview: async (tuiModel) => directReviewSessionFromModel(tuiModel),
+    resumeRun: async () => {
+      resumeCalls += 1;
+      return { status: 'running', pid: 4242 };
+    },
+    initialPanel: 'review',
+    noColor: true,
+    refreshMs: 5000,
+  }),
+  ['R', 'q'],
+);
+assert.equal(resumeCalls, 0);
+assert.match(resumeBeforeSave.output, /Save review decisions before resume/);
+
+const saveThenResume = await driveTui(
+  ({ input, output }) => runTerminalTui({
+    inputStream: input,
+    outputStream: output,
+    load: directLoad,
+    saveReview: async (tuiModel) => directReviewSessionFromModel(tuiModel, 'HR-tui-save-resume'),
+    resumeRun: async () => {
+      resumeCalls += 1;
+      return { status: 'running', pid: 4243, backgroundLogPath: '.codex/delivery-runs/tui-smoke-run/background.log' };
+    },
+    initialPanel: 'review',
+    noColor: true,
+    refreshMs: 5000,
+  }),
+  [
+    { key: 's', wait: 150 },
+    { key: 'R', wait: 150 },
+    'q',
+  ],
+);
+assert.equal(resumeCalls, 1);
+assert.match(saveThenResume.output, /Saved as HR-tui-save-resume/);
+assert.match(saveThenResume.output, /Resume started pid=4243/);
+assert.equal(saveThenResume.result.resumeState.status, 'running');
+
+let dirtyResumeCalls = 0;
+const dirtyRepoBlocked = await driveTui(
+  ({ input, output }) => runTerminalTui({
+    inputStream: input,
+    outputStream: output,
+    load: async () => ({
+      repo,
+      runId,
+      state,
+      background: null,
+      inbox,
+      events,
+      dirtyEntries: [' M .codex/delivery-kit/lib/tui.mjs'],
+      allowDirty: false,
+    }),
+    saveReview: async (tuiModel) => directReviewSessionFromModel(tuiModel, 'HR-tui-dirty-blocked'),
+    resumeRun: async () => {
+      dirtyResumeCalls += 1;
+      return { status: 'running', pid: 4244 };
+    },
+    initialPanel: 'review',
+    noColor: true,
+    refreshMs: 5000,
+  }),
+  [
+    { key: 's', wait: 150 },
+    'R',
+    'q',
+  ],
+);
+assert.equal(dirtyResumeCalls, 0);
+assert.match(dirtyRepoBlocked.output, /Repository has uncommitted changes/);
+assert.match(dirtyRepoBlocked.output, /Press 5 for Workspace/);
+
+const dirtyWorkspace = await driveTui(
+  ({ input, output }) => runTerminalTui({
+    inputStream: input,
+    outputStream: output,
+    load: async () => ({
+      repo,
+      runId,
+      state,
+      background: null,
+      inbox,
+      events,
+      dirtyEntries: [' M .codex/delivery-kit/lib/tui.mjs', '?? scripts/tui-smoke.mjs'],
+      allowDirty: false,
+    }),
+    saveReview: async (tuiModel) => directReviewSessionFromModel(tuiModel, 'HR-tui-dirty-workspace'),
+    resumeRun: async () => {
+      dirtyResumeCalls += 1;
+      return { status: 'running', pid: 4246 };
+    },
+    initialPanel: 'overview',
+    noColor: true,
+    refreshMs: 5000,
+  }),
+  [
+    '5',
+    '!',
+    { key: 's', wait: 50 },
+    '4',
+    { key: 's', wait: 150 },
+    { key: 'R', wait: 150 },
+    'q',
+  ],
+);
+assert.match(dirtyWorkspace.output, /Workspace/);
+assert.match(dirtyWorkspace.output, /Dirty Entries/);
+assert.match(dirtyWorkspace.output, /Dirty resume is enabled/);
+assert.match(dirtyWorkspace.output, /Resume started pid=4246/);
+assert.equal(dirtyResumeCalls, 1);
+
+const dirtyRepoAllowed = await driveTui(
+  ({ input, output }) => runTerminalTui({
+    inputStream: input,
+    outputStream: output,
+    load: async () => ({
+      repo,
+      runId,
+      state,
+      background: null,
+      inbox,
+      events,
+      dirtyEntries: [' M .codex/delivery-kit/lib/tui.mjs'],
+      allowDirty: true,
+    }),
+    saveReview: async (tuiModel) => directReviewSessionFromModel(tuiModel, 'HR-tui-dirty-allowed'),
+    resumeRun: async () => {
+      dirtyResumeCalls += 1;
+      return { status: 'running', pid: 4245 };
+    },
+    initialPanel: 'review',
+    noColor: true,
+    refreshMs: 5000,
+  }),
+  [
+    { key: 's', wait: 150 },
+    { key: 'R', wait: 150 },
+    'q',
+  ],
+);
+assert.equal(dirtyResumeCalls, 2);
+assert.match(dirtyRepoAllowed.output, /Resume started pid=4245/);
+
+let refreshLoads = 0;
+const refreshPreservesEdits = await driveTui(
+  ({ input, output }) => runTerminalTui({
+    inputStream: input,
+    outputStream: output,
+    load: async () => {
+      refreshLoads += 1;
+      return { repo, runId, state, background: null, inbox, events };
+    },
+    saveReview: async (tuiModel) => directReviewSessionFromModel(tuiModel),
+    initialPanel: 'review',
+    noColor: true,
+    refreshMs: 50,
+  }),
+  [
+    { key: 'e', wait: 360 },
+    'q',
+  ],
+);
+assert.ok(refreshLoads > 1);
+assert.equal(refreshPreservesEdits.result.pendingDecisions[inbox.items[0].id], 'environment_required');
+assert.equal(refreshPreservesEdits.result.dirty, true);
+assert.match(refreshPreservesEdits.output, /Unsaved changes/);
 
 const nonTtyOutput = outputCollector();
 await assert.rejects(
@@ -305,6 +522,15 @@ const eventRun = await driveTui(
 assert.match(eventRun.output, /\[validation\] failed/);
 assert.match(eventRun.output, /\[final\] blocked/);
 
+const onceOutput = outputCollector();
+await tuiCommand(
+  { repo, run: runId, panel: 'review', once: true, noColor: true, _: [] },
+  { inputStream: Readable.from([]), outputStream: onceOutput.stream },
+);
+assert.match(onceOutput.text(), /Review Inbox/);
+assert.match(onceOutput.text(), /Not saved yet/);
+assert.doesNotMatch(onceOutput.text(), /\u001b\[\?1049h/);
+
 const reviewRun = await driveTui(
   ({ input, output }) => reviewCommand({ repo, run: runId, tui: true, noColor: true, _: [] }, { inputStream: input, outputStream: output }),
   [
@@ -318,6 +544,8 @@ const reviewRun = await driveTui(
 );
 assert.match(reviewRun.output, /Review Inbox/);
 assert.match(reviewRun.output, /Human review saved/);
+assert.match(reviewRun.output, /Saved as HR-/);
+assert.match(reviewRun.output, /Resume ready/);
 const saved = JSON.parse(await readFile(runPaths(repo, runId).state, 'utf8'));
 assert.equal(saved.humanReviews.length, 1);
 assert.equal(saved.humanReviews[0].counts.byDecision.repair_requested, 3);
@@ -328,5 +556,37 @@ assert.equal(artifact.decisions.length, 3);
 assert.equal(artifact.decisions[0].note, 'Approved by TUI');
 assert.equal(artifact.counts.byDecision.repair_requested, 3);
 assert.ok(await exists(path.join(repo, '.codex', 'delivery-runs', runId, 'human-reviews.jsonl')));
+
+const savedInbox = await buildHumanReviewInbox(repo, saved);
+const savedModel = createTuiModel({ repo, runId, state: saved, inbox: savedInbox, events, initialPanel: 'review', noColor: true });
+assert.equal(savedModel.reviewSaved, true);
+assert.equal(savedModel.dirty, false);
+assert.equal(savedModel.savedReviewId, saved.humanReviews[0].id);
+assert.equal(savedModel.pendingNotes[savedInbox.items[0].id], 'Approved by TUI');
+assert.match(renderTuiScreen(savedModel, { width: 120, height: 30 }), /Saved as HR-/);
+assert.match(renderTuiScreen(savedModel, { width: 120, height: 30 }), /Resume ready/);
+
+const changedCommitModel = createTuiModel({
+  repo,
+  runId,
+  state: { ...saved, integration: { ...saved.integration, commit: `different-${baseCommit}` } },
+  inbox: savedInbox,
+  events,
+  initialPanel: 'review',
+  noColor: true,
+});
+assert.equal(changedCommitModel.reviewSaved, false);
+assert.equal(changedCommitModel.pendingNotes[savedInbox.items[0].id], undefined);
+
+const missingItemModel = createTuiModel({
+  repo,
+  runId,
+  state: saved,
+  inbox: { ...savedInbox, items: savedInbox.items.slice(0, -1) },
+  events,
+  initialPanel: 'review',
+  noColor: true,
+});
+assert.equal(missingItemModel.reviewSaved, false);
 
 console.log('tui-smoke: OK');
