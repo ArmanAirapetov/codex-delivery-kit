@@ -208,6 +208,7 @@ class UserFacingError extends Error {
     this.name = 'UserFacingError';
   }
 }
+export { UserFacingError };
 
 function resolveCliPath(value, base = process.cwd()) {
   return path.resolve(base, String(value));
@@ -415,7 +416,7 @@ function childOptionArgs(options) {
   return args;
 }
 
-function processAlive(pid) {
+export function processAlive(pid) {
   const numeric = Number(pid);
   if (!Number.isInteger(numeric) || numeric <= 0) return false;
   try {
@@ -432,7 +433,7 @@ function backgroundSignalTarget(pid) {
   return -numeric;
 }
 
-function backgroundIsStale(record) {
+export function backgroundIsStale(record) {
   return Boolean(record?.pid && !processAlive(record.pid) && !BACKGROUND_TERMINAL_STATUSES.has(record.status));
 }
 
@@ -440,7 +441,7 @@ function renderBackgroundStaleLine(record) {
   return `[background] stale pid=${record.pid} status=${record.status ?? 'unknown'}; process is not alive. Resume can archive running workstreams and retry.`;
 }
 
-async function readBackgroundRecord(repo, runId) {
+export async function readBackgroundRecord(repo, runId) {
   return readJsonIfExists(runPaths(repo, runId).background);
 }
 
@@ -449,7 +450,7 @@ async function writeBackgroundRecord(repo, runId, record) {
   return record;
 }
 
-async function updateBackgroundRecord(repo, runId, patch) {
+export async function updateBackgroundRecord(repo, runId, patch) {
   const current = await readBackgroundRecord(repo, runId) ?? {};
   return writeBackgroundRecord(repo, runId, { ...current, ...patch, updatedAt: now() });
 }
@@ -1632,14 +1633,14 @@ function itemCounts(items) {
   };
 }
 
-function decisionCounts(decisions) {
+export function decisionCounts(decisions) {
   return {
     total: decisions.length,
     byDecision: countBy(decisions.map((item) => item.decision)),
   };
 }
 
-function reviewItemDecisionSeed(item) {
+export function reviewItemDecisionSeed(item) {
   return {
     itemId: item.id,
     type: item.type,
@@ -1834,7 +1835,7 @@ export async function humanRepairContextForState(repo, state) {
   return null;
 }
 
-async function meaningfulStatusEntries(repo) {
+export async function meaningfulStatusEntries(repo) {
   const status = await statusPorcelain(repo);
   return status
     .split('\n')
@@ -1842,7 +1843,7 @@ async function meaningfulStatusEntries(repo) {
     .filter((line) => !line.slice(3).startsWith('.codex/delivery-runs/'));
 }
 
-async function recordHumanReview(repo, state, session) {
+export async function recordHumanReview(repo, state, session) {
   const paths = runPaths(repo, state.runId);
   const reviewDir = path.join(paths.artifacts, 'human-reviews');
   await ensureDir(reviewDir);
@@ -2148,7 +2149,7 @@ async function startBackgroundRun({ cwd = process.cwd(), objective, options = {}
   return backgroundOutput(repo, state.runId, record);
 }
 
-async function startBackgroundResume({ cwd = process.cwd(), options = {} }) {
+export async function startBackgroundResume({ cwd = process.cwd(), options = {} }) {
   const initialRepo = await repositoryRootFor(cwd);
   const config = await loadConfig(initialRepo, options);
   const repo = await assertUsableRepository(initialRepo, { allowDirty: config.allowDirty });
@@ -2223,7 +2224,7 @@ async function backgroundChildCommand(options) {
   }
 }
 
-async function latestRunId(repo) {
+export async function latestRunId(repo) {
   const latest = path.join(repo, '.codex', 'delivery-runs', 'latest');
   try {
     return (await readFile(latest, 'utf8')).trim();
@@ -2791,10 +2792,7 @@ async function waitForProcessExit(pid, timeoutMs = 5000) {
   return !processAlive(pid);
 }
 
-async function stopCommand(options) {
-  const repo = await repositoryRootFor(await repoCwdFromOptions(options));
-  const runId = options.run || await latestRunId(repo);
-  if (!runId) throw new Error('No delivery run selected.');
+export async function stopDeliveryRun({ repo, runId }) {
   const state = await loadState(repo, runId);
   const background = await readBackgroundRecord(repo, runId);
   if (!background?.pid) throw new UserFacingError(`Run ${runId} has no background process metadata.`);
@@ -2819,27 +2817,43 @@ async function stopCommand(options) {
     ? { type: 'background.stopped', pid: background.pid, mode: background.mode, signal: signalSent ? 'SIGTERM' : null, signalError }
     : { type: 'background.stop.pending', pid: background.pid, mode: background.mode, signal: signalSent ? 'SIGTERM' : null, signalError });
   await saveState(repo, state);
-  process.stdout.write(`${JSON.stringify({
+  return {
     runId,
     pid: background.pid,
     signalSent,
     signalError,
     exited,
     status: finalRecord.status,
-  }, null, 2)}\n`);
+  };
+}
+
+async function stopCommand(options) {
+  const repo = await repositoryRootFor(await repoCwdFromOptions(options));
+  const runId = options.run || await latestRunId(repo);
+  if (!runId) throw new Error('No delivery run selected.');
+  process.stdout.write(`${JSON.stringify(await stopDeliveryRun({ repo, runId }), null, 2)}\n`);
+}
+
+export async function cleanupDeliveryRun({ repo, runId, integration = false, logs = false } = {}) {
+  const state = await loadState(repo, runId);
+  for (const item of state.workstreams) {
+    if (item.worktreePath) await removeWorktree(repo, item.worktreePath, item.branch);
+  }
+  if (integration && state.integration?.worktreePath) await removeWorktree(repo, state.integration.worktreePath, state.integration.branch);
+  await git(repo, ['worktree', 'prune'], { rejectOnError: false });
+  if (logs) await rm(runPaths(repo, runId).root, { recursive: true, force: true });
+  return {
+    runId,
+    integrationRemoved: Boolean(integration),
+    logsRemoved: Boolean(logs),
+  };
 }
 
 async function cleanupCommand(options) {
   const repo = await repositoryRootFor(await repoCwdFromOptions(options));
   const runId = options.run || await latestRunId(repo);
   if (!runId) throw new Error('No delivery run selected.');
-  const state = await loadState(repo, runId);
-  for (const item of state.workstreams) {
-    if (item.worktreePath) await removeWorktree(repo, item.worktreePath, item.branch);
-  }
-  if (options.integration && state.integration.worktreePath) await removeWorktree(repo, state.integration.worktreePath, state.integration.branch);
-  await git(repo, ['worktree', 'prune'], { rejectOnError: false });
-  if (options.logs) await rm(runPaths(repo, runId).root, { recursive: true, force: true });
+  await cleanupDeliveryRun({ repo, runId, integration: Boolean(options.integration), logs: Boolean(options.logs) });
   process.stdout.write(`Cleaned run ${runId}. Integration worktree ${options.integration ? 'removed' : 'preserved'}.\n`);
 }
 
@@ -2857,6 +2871,7 @@ Usage:
   node .codex/delivery-kit/cli.mjs status [--repo <path>] [--run <id>] [--json]
   node .codex/delivery-kit/cli.mjs status [--repo <path>] [--run <id>] --tui
   node .codex/delivery-kit/cli.mjs tui [--repo <path>] [--run <id>] [--panel cockpit|review|timeline|workspace|diagnostics] [--view simple|verbose|extended] [--once]
+  node .codex/delivery-kit/cli.mjs web [--repo <path>] [--host 127.0.0.1] [--port 0]
   node .codex/delivery-kit/cli.mjs report [--repo <path>] [--run <id>]
   node .codex/delivery-kit/cli.mjs stop [--repo <path>] [--run <id>]
   node .codex/delivery-kit/cli.mjs cleanup [--repo <path>] [--run <id>] [--integration] [--logs]
@@ -2881,6 +2896,8 @@ Run/resume options:
   --verbose             Print additional sanitized progress details
   --no-color            Disable colorized terminal output
   --no-time             Hide elapsed-time prefixes in human progress/log/TUI output
+  --host <host>         Web UI bind host, default 127.0.0.1
+  --port <port>         Web UI bind port, default 0 for any free port
   --no-auto-install-deps
                         Do not auto-prepare checked-in project deps after human approval
   --raw                 Retain raw Codex JSONL in addition to sanitized events
@@ -2921,6 +2938,9 @@ async function main() {
     await reviewCommand(options);
   } else if (command === 'status') {
     await statusCommand(options);
+  } else if (command === 'web') {
+    const { startWebUi } = await import('./web-server.mjs');
+    await startWebUi(options);
   } else if (command === 'report') {
     await reportCommand(options);
   } else if (command === 'stop') {

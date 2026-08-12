@@ -86,11 +86,14 @@ Foreground `run` и `resume` рендерят concise sanitized progress в stde
 ./scripts/codex-delivery tui --run <run-id>
 ./scripts/codex-delivery status --run <run-id> --tui
 ./scripts/codex-delivery review --run <run-id> --tui
+./scripts/codex-delivery web
 ```
 
 `logs` читает `events.jsonl` и применяет тот же renderer. Plain `logs` выводит весь history; `logs --follow` по умолчанию начинает с последних 80 event records, чтобы длинные resume chains не скрывали current process. `--tail <n>` задаёт другое окно, `--all` возвращает полный history перед follow. Normal output показывает high-level phases, sanitized command starts, file-change counts, agent message lengths and background heartbeats, so a long-running agent does not look silent. Human progress/log lines include run-relative elapsed prefixes; `--no-time` hides those prefixes. It still does not include prompt text, agent message text or raw JSONL. `--verbose` adds sanitized paths, command completions, duration and token totals.
 
 `tui`, `status --tui` and `review --tui` are Ink/React terminal views over the same `state.json`, `summary.md`, `events.jsonl` and human-review inbox. The nested runtime is installed with `npm ci --omit=dev --prefix .codex/delivery-kit`. The default Cockpit shows progress rails, elapsed/phase time, conservative ETA, active work, Timeline snapshot, and an Intervention Queue. ETA is derived from existing timestamps and same-run completed durations; when evidence is weak it is explicitly shown as unknown or low confidence. Press `v` to cycle normal/detail/raw; `simple|verbose|extended` remain accepted as view names. The TUI does not create a second audit stream: saving review decisions emits the same `human.review.recorded` event and the same `human-reviews.jsonl` / `artifacts/human-reviews/*.json` records as guided `review`. Saving and resume are confirmation-gated (`s`/`R`, then `y`). Interactive TUI mode requires a TTY; non-TTY automation should use plain commands, `--json`, or `tui --once --no-color` for a single rendered snapshot. Workspace shows `git status --short` entries and the `!` key toggles dirty resume for the current TUI session without modifying Git files.
+
+`web` serves a local Vite/React operator console over the same artifacts. API calls require the ephemeral token printed at startup, live updates use SSE, and write actions reuse the same review/resume/stop/cleanup service logic as CLI/TUI.
 
 ## 4. Sanitized Codex and hook records
 

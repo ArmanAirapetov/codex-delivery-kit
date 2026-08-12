@@ -18,6 +18,10 @@ node scripts/install-smoke.mjs
 node scripts/analyzer-smoke.mjs
 node scripts/review-smoke.mjs
 node scripts/tui-smoke.mjs
+npm --prefix .codex/delivery-kit run web:check
+npm --prefix .codex/delivery-kit run web:test
+npm --prefix .codex/delivery-kit run web:build
+node scripts/web-smoke.mjs
 node scripts/workflow-smoke.mjs
 
 echo "smoke-test: ALL OK"

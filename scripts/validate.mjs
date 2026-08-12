@@ -47,8 +47,9 @@ async function requireAny(label, candidates) {
 async function main() {
   const required = [
     'AGENTS.md', '.codex/config.toml', 'codex-delivery.config.json',
-    '.codex/delivery-kit/cli.mjs', '.codex/delivery-kit/mcp-server.mjs',
+    '.codex/delivery-kit/cli.mjs', '.codex/delivery-kit/mcp-server.mjs', '.codex/delivery-kit/web-server.mjs',
     '.codex/delivery-kit/package.json', '.codex/delivery-kit/package-lock.json',
+    '.codex/delivery-kit/web/src/App.tsx', '.codex/delivery-kit/web/vite.config.ts',
     '.agents/skills/codex-delivery/SKILL.md', 'scripts/codex-delivery',
   ];
   for (const relative of required) await access(path.join(ROOT, relative));
@@ -100,6 +101,9 @@ async function main() {
   assert.equal(runtimePackage.engines?.node, '>=22', 'Runtime package must declare Node.js >=22 for current Ink.');
   assert.equal(runtimePackage.dependencies?.ink, '7.1.1', 'Runtime package must pin Ink.');
   assert.equal(runtimePackage.dependencies?.react, '19.2.4', 'Runtime package must pin React.');
+  assert(runtimePackage.scripts?.['web:build'], 'Runtime package must expose web:build.');
+  assert(runtimePackage.dependencies?.vite, 'Runtime package must include Vite for Web UI builds.');
+  assert(runtimePackage.dependencies?.['@tanstack/react-query'], 'Runtime package must include TanStack Query.');
 
   console.log(`validate: OK (${mjsFiles.length} JavaScript modules, ${jsonFiles.length} JSON files, ${agents.length} agents)`);
 }

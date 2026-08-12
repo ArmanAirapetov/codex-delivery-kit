@@ -61,6 +61,7 @@ copy_if_absent() {
 # Runtime and schemas are versioned as one unit.
 copy_replace ".codex/delivery-kit"
 rm -rf -- "$REPO/.codex/delivery-kit/node_modules"
+rm -rf -- "$REPO/.codex/delivery-kit/web/dist"
 copy_replace "delivery/schemas"
 
 # Project custom agents. Preserve unrelated agent files.
@@ -76,7 +77,7 @@ copy_replace ".agents/skills/codex-delivery"
 
 # Operator scripts.
 mkdir -p "$REPO/scripts"
-for name in codex-delivery analyze-runs.mjs install.sh validate.mjs core-smoke.mjs mcp-smoke.mjs hook-smoke.mjs install-smoke.mjs analyzer-smoke.mjs review-smoke.mjs tui-smoke.mjs workflow-smoke.mjs smoke-test.sh; do
+for name in codex-delivery analyze-runs.mjs install.sh validate.mjs core-smoke.mjs mcp-smoke.mjs hook-smoke.mjs install-smoke.mjs analyzer-smoke.mjs review-smoke.mjs tui-smoke.mjs web-smoke.mjs workflow-smoke.mjs smoke-test.sh; do
   relative="scripts/$name"
   backup_path "$relative"
   cp -a -- "$SOURCE_ROOT/$relative" "$REPO/$relative"
@@ -205,6 +206,7 @@ block = "\n".join([
     begin,
     ".codex/delivery-runs/",
     ".codex/delivery-kit/node_modules/",
+    ".codex/delivery-kit/web/dist/",
     ".codex/hook-events/",
     ".codex-delivery-backups/",
     ".codex-delivery-worktrees/",
@@ -223,6 +225,7 @@ if [[ "${CODEX_DELIVERY_SKIP_RUNTIME_DEPS:-0}" == "1" ]]; then
   echo "[warn] Skipping Codex Delivery Kit runtime dependency install."
 else
   npm ci --omit=dev --prefix "$REPO/.codex/delivery-kit"
+  npm --prefix "$REPO/.codex/delivery-kit" run web:build
 fi
 
 node "$SOURCE_ROOT/scripts/validate.mjs" >/dev/null

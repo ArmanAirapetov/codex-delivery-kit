@@ -55,6 +55,15 @@
 - alternate-screen enter/restore and raw-mode cleanup;
 - durable human-review artifact persistence from the TUI save action.
 
+### Web smoke
+
+Проверяет local Vite/React operator console:
+
+- TypeScript check, Vitest frontend tests, and production Vite build;
+- local API token rejection and authorized health/runs calls;
+- synthetic blocked run rendering through the Web service;
+- review inbox fetch and durable human-review save through the API.
+
 ### Workflow smoke
 
 Полный offline test:
@@ -93,6 +102,7 @@ node scripts/install-smoke.mjs
 node scripts/analyzer-smoke.mjs
 node scripts/review-smoke.mjs
 node scripts/tui-smoke.mjs
+node scripts/web-smoke.mjs
 node scripts/workflow-smoke.mjs
 ```
 
