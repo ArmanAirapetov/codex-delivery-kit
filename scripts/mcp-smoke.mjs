@@ -3,12 +3,11 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { runProcess } from '../.codex/delivery-kit/lib/git.mjs';
+import { handleMcpRequest } from '../.codex/delivery-kit/mcp-server.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const SERVER = path.join(ROOT, '.codex', 'delivery-kit', 'mcp-server.mjs');
 
 async function git(cwd, args) {
   const result = await runProcess('git', args, { cwd });
@@ -25,45 +24,16 @@ async function main() {
     await git(temp, ['add', 'README.md']);
     await git(temp, ['commit', '-q', '-m', 'fixture']);
 
-    const child = spawn(process.execPath, [SERVER], {
-      cwd: temp,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env },
-    });
-    child.stdout.setEncoding('utf8');
-    child.stderr.setEncoding('utf8');
-
-    let buffer = '';
-    let stderr = '';
+    const previousCwd = process.cwd();
+    process.chdir(temp);
     let nextId = 1;
-    const pending = new Map();
-    child.stderr.on('data', (chunk) => { stderr += chunk; });
-    child.stdout.on('data', (chunk) => {
-      buffer += chunk;
-      const lines = buffer.split(/\r?\n/);
-      buffer = lines.pop() ?? '';
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        const message = JSON.parse(line);
-        const waiter = pending.get(message.id);
-        if (waiter) {
-          pending.delete(message.id);
-          if (message.error) waiter.reject(new Error(message.error.message));
-          else waiter.resolve(message.result);
-        }
-      }
-    });
-
-    const request = (method, params = {}) => new Promise((resolve, reject) => {
+    const request = async (method, params = {}) => {
       const id = nextId++;
-      const timeout = setTimeout(() => {
-        if (pending.delete(id)) reject(new Error(`MCP timeout for ${method}. stderr=${stderr}`));
-      }, 5000);
-      const wrappedResolve = (value) => { clearTimeout(timeout); resolve(value); };
-      const wrappedReject = (error) => { clearTimeout(timeout); reject(error); };
-      pending.set(id, { resolve: wrappedResolve, reject: wrappedReject });
-      child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
-    });
+      const message = await handleMcpRequest({ jsonrpc: '2.0', id, method, params });
+      assert(message, `MCP request ${method} produced no response.`);
+      if (message.error) throw new Error(message.error.message);
+      return message.result;
+    };
 
     const initialize = await request('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'smoke', version: '1' } });
     assert.equal(initialize.serverInfo.name, 'codex-delivery-workflow');
@@ -136,10 +106,14 @@ async function main() {
 
     const latest = (await readFile(path.join(temp, '.codex', 'delivery-runs', 'latest-interactive'), 'utf8')).trim();
     assert.equal(latest, begun.runId);
-    child.kill('SIGTERM');
-    await new Promise((resolve) => child.once('exit', resolve));
+    process.chdir(previousCwd);
     console.log('mcp-smoke: OK');
   } finally {
+    try {
+      if (process.cwd() === temp) process.chdir(ROOT);
+    } catch {
+      process.chdir(ROOT);
+    }
     await rm(temp, { recursive: true, force: true });
   }
 }

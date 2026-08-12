@@ -2,6 +2,7 @@
 import { randomUUID } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   appendEvent,
   appendResult,
@@ -19,7 +20,7 @@ import {
 } from './lib/core.mjs';
 import { currentRef, headCommit, repoRoot } from './lib/git.mjs';
 
-const tools = [
+export const tools = [
   {
     name: 'delivery_begin',
     description: 'Start a persisted interactive delivery run. Call before planning.',
@@ -243,7 +244,7 @@ function errorResponse(id, error) {
 }
 
 let buffer = '';
-const keepAlive = setInterval(() => {}, 60000);
+let keepAlive = null;
 let inputClosed = false;
 const pending = new Set();
 
@@ -251,22 +252,31 @@ function maybeClose() {
   if (inputClosed && pending.size === 0) clearInterval(keepAlive);
 }
 
+export async function handleMcpRequest(request) {
+  if (request.method === 'initialize') {
+    return { jsonrpc: '2.0', id: request.id, result: { protocolVersion: request.params?.protocolVersion ?? '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'codex-delivery-workflow', version: '1.0.0' } } };
+  }
+  if (request.method === 'tools/list') {
+    return { jsonrpc: '2.0', id: request.id, result: { tools } };
+  }
+  if (request.method === 'tools/call') {
+    try {
+      const result = await callTool(request.params.name, request.params.arguments ?? {});
+      return { jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }], structuredContent: result, isError: false } };
+    } catch (error) {
+      return { jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text: error.message }], structuredContent: { error: error.message }, isError: true } };
+    }
+  }
+  if (request.id !== undefined && request.method === 'ping') {
+    return { jsonrpc: '2.0', id: request.id, result: {} };
+  }
+  return null;
+}
+
 function handleRequest(request) {
   const task = Promise.resolve().then(async () => {
-    if (request.method === 'initialize') {
-      response(request.id, { protocolVersion: request.params?.protocolVersion ?? '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'codex-delivery-workflow', version: '1.0.0' } });
-    } else if (request.method === 'tools/list') {
-      response(request.id, { tools });
-    } else if (request.method === 'tools/call') {
-      try {
-        const result = await callTool(request.params.name, request.params.arguments ?? {});
-        response(request.id, { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }], structuredContent: result, isError: false });
-      } catch (error) {
-        response(request.id, { content: [{ type: 'text', text: error.message }], structuredContent: { error: error.message }, isError: true });
-      }
-    } else if (request.id !== undefined && request.method === 'ping') {
-      response(request.id, {});
-    }
+    const message = await handleMcpRequest(request);
+    if (message) response(message.id, message.result);
   }).catch((error) => errorResponse(request.id, error)).finally(() => {
     pending.delete(task);
     maybeClose();
@@ -274,18 +284,8 @@ function handleRequest(request) {
   pending.add(task);
 }
 
-process.stdin.setEncoding('utf8');
-process.stdin.resume();
-process.stdin.on('end', () => {
-  inputClosed = true;
-  maybeClose();
-});
-process.stdin.on('close', () => {
-  inputClosed = true;
-  maybeClose();
-});
-process.stdin.on('data', (chunk) => {
-  buffer += chunk;
+function processInputText(text) {
+  buffer += text;
   const lines = buffer.split(/\r?\n/);
   buffer = lines.pop() ?? '';
   for (const line of lines) {
@@ -294,4 +294,35 @@ process.stdin.on('data', (chunk) => {
     try { request = JSON.parse(line); } catch { continue; }
     handleRequest(request);
   }
-});
+}
+
+async function runServer() {
+  keepAlive = setInterval(() => {}, 60000);
+  const requestFile = process.env.CODEX_DELIVERY_MCP_REQUEST_FILE;
+  if (requestFile) {
+    processInputText(await readFile(requestFile, 'utf8'));
+    inputClosed = true;
+    maybeClose();
+    return;
+  }
+
+  process.stdin.setEncoding('utf8');
+  process.stdin.resume();
+  process.stdin.on('end', () => {
+    inputClosed = true;
+    maybeClose();
+  });
+  process.stdin.on('close', () => {
+    inputClosed = true;
+    maybeClose();
+  });
+  process.stdin.on('data', (chunk) => processInputText(chunk));
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  runServer().catch((error) => {
+    errorResponse(null, error);
+    inputClosed = true;
+    maybeClose();
+  });
+}
