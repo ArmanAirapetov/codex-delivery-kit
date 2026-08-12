@@ -59,7 +59,7 @@ import {
   workerPrompt,
 } from './lib/prompts.mjs';
 import { createProgressLogger, isTerminalProgressEvent, renderProgressLine } from './lib/progress.mjs';
-import { runTerminalTui } from './lib/tui.mjs';
+import { runTerminalTui, TUI_VIEW_MODES } from './lib/tui.mjs';
 
 const KIT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SCHEMA_ROOT = path.join(KIT_ROOT, 'delivery', 'schemas');
@@ -2487,6 +2487,10 @@ export async function tuiCommand(options, { inputStream = process.stdin, outputS
   const repo = await repositoryRootFor(await repoCwdFromOptions(options));
   const runId = options.run || await latestRunId(repo);
   if (!runId) throw new Error('No delivery run selected.');
+  const viewMode = options.view ?? options.tuiView ?? 'simple';
+  if (!TUI_VIEW_MODES.includes(viewMode)) {
+    throw new UserFacingError(`Invalid TUI view '${viewMode}'. Use one of: ${TUI_VIEW_MODES.join(', ')}.`);
+  }
 
   const load = async () => {
     const state = await loadState(repo, runId);
@@ -2521,6 +2525,7 @@ export async function tuiCommand(options, { inputStream = process.stdin, outputS
     load,
     saveReview,
     initialPanel,
+    viewMode,
     noColor: Boolean(options.noColor),
   });
 }
@@ -2816,7 +2821,7 @@ Usage:
   node .codex/delivery-kit/cli.mjs review [--repo <path>] [--run <id>] --tui
   node .codex/delivery-kit/cli.mjs status [--repo <path>] [--run <id>] [--json]
   node .codex/delivery-kit/cli.mjs status [--repo <path>] [--run <id>] --tui
-  node .codex/delivery-kit/cli.mjs tui [--repo <path>] [--run <id>] [--panel overview|events|checkpoints|review]
+  node .codex/delivery-kit/cli.mjs tui [--repo <path>] [--run <id>] [--panel overview|events|checkpoints|review] [--view simple|verbose|extended]
   node .codex/delivery-kit/cli.mjs report [--repo <path>] [--run <id>]
   node .codex/delivery-kit/cli.mjs stop [--repo <path>] [--run <id>]
   node .codex/delivery-kit/cli.mjs cleanup [--repo <path>] [--run <id>] [--integration] [--logs]
@@ -2834,6 +2839,7 @@ Run/resume options:
   --json                Print machine-readable output for review/status
   --tui                 Open the interactive terminal UI for status or review
   --panel <name>        Initial TUI panel: overview, events, checkpoints, review
+  --view <mode>         TUI detail level: simple, verbose, extended
   --quiet               Suppress live progress output
   --verbose             Print additional sanitized progress details
   --no-color            Disable colorized terminal output

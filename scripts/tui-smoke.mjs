@@ -192,6 +192,7 @@ await writeFile(path.join(repo, '.codex', 'delivery-runs', runId, 'commands', 'v
 await writeFile(path.join(repo, '.codex', 'delivery-runs', runId, 'commands', 'validation-setup-01.log'), 'installed\n', 'utf8');
 await saveState(repo, state);
 await appendEvent(repo, state, { type: 'workflow.started', baseRef: 'main', baseCommit });
+await appendEvent(repo, state, { type: 'codex.hook.pre-tool-use', hook: 'pre-tool-use' });
 await appendEvent(repo, state, { type: 'workflow.checkpoint', checkpoint: 'validation', tracks: 2 });
 await appendEvent(repo, state, { type: 'validation.completed', command: 'python -m pytest tests/tui', ok: false, exitCode: 1, durationMs: 55, index: 1, total: 2 });
 await appendEvent(repo, state, { type: 'quality.gate', passed: false, failedCommands: 1, failedCriteria: 1, blockingFindings: 1 });
@@ -208,7 +209,11 @@ let model = createTuiModel({ repo, runId, state, inbox, events, noColor: true })
 const overview = renderTuiScreen(model, { width: 100, height: 30 });
 assert.match(overview, /Codex Delivery TUI/);
 assert.match(overview, /TUI smoke blocked delivery/);
+assert.match(overview, /Next Action/);
+assert.match(overview, /3 review items need a decision/);
+assert.match(overview, /Recommended: open Review/);
 assert.match(overview, /Validation:/);
+assert.doesNotMatch(overview, /faileds|approveds|not approveds/);
 assert.equal(stripAnsi(overview), overview);
 
 const previousForceColor = process.env.FORCE_COLOR;
@@ -225,13 +230,31 @@ else process.env.NO_COLOR = previousNoColor;
 
 model = applyTuiKey(model, '2').model;
 assert.equal(model.panel, 'events');
-assert.match(renderTuiScreen(model, { width: 100, height: 18 }), /\[validation\] failed/);
+const simpleTimeline = renderTuiScreen(model, { width: 100, height: 22 });
+assert.match(simpleTimeline, /Timeline \(/);
+assert.match(simpleTimeline, /Operator timeline/);
+assert.match(simpleTimeline, /\[validation\] failed/);
+assert.doesNotMatch(simpleTimeline, /codex\.hook\.pre-tool-use/);
+model = applyTuiKey(model, 'v').model;
+assert.equal(model.viewMode, 'verbose');
+assert.match(renderTuiScreen(model, { width: 100, height: 22 }), /codex\.hook\.pre-tool-use/);
+model = applyTuiKey(model, 'v').model;
+assert.equal(model.viewMode, 'extended');
+assert.match(renderTuiScreen(model, { width: 100, height: 22 }), /Raw Events/);
+model = applyTuiKey(model, 'v').model;
+assert.equal(model.viewMode, 'simple');
 model = applyTuiKey(model, '3').model;
 assert.equal(model.panel, 'checkpoints');
-assert.match(renderTuiScreen(model, { width: 100, height: 18 }), /\[checkpoint\]/);
+const checkpoints = renderTuiScreen(model, { width: 120, height: 24 });
+assert.match(checkpoints, /\[validation\] 1\/2 passed, 1 failed/);
+assert.match(checkpoints, /\[review\] reviewer changes_requested findings=1/);
+assert.match(checkpoints, /\[final\] blocked/);
 model = applyTuiKey(model, '4').model;
 assert.equal(model.panel, 'review');
-assert.match(renderTuiScreen(model, { width: 120, height: 30 }), /Review Inbox \(3\)/);
+const reviewScreen = renderTuiScreen(model, { width: 120, height: 30 });
+assert.match(reviewScreen, /Review Inbox \(3\)/);
+assert.match(reviewScreen, /Current decisions: 3 Approve repair/);
+assert.match(reviewScreen, /Selected 1\/3/);
 model = applyTuiKey(model, 'j').model;
 assert.equal(model.selected.review, 1);
 model = applyTuiKey(model, 'k').model;
@@ -244,6 +267,10 @@ model = applyTuiKey(model, 'a').model;
 assert.equal(model.decisions[inbox.items[0].id], 'acknowledged');
 model = applyTuiKey(model, 'r').model;
 assert.equal(model.decisions[inbox.items[0].id], 'repair_requested');
+model = applyTuiKey(model, 'A').model;
+assert.equal(reviewDecisionCounts(model).repair_requested, 3);
+model = applyTuiKey(model, 'x').model;
+assert.equal(model.expandedDetails[inbox.items[0].id], true);
 model = applyTuiKey(model, 'n').model;
 for (const char of 'TUI note') model = applyTuiKey(model, char).model;
 model = applyTuiKey(model, '\r').model;
@@ -254,6 +281,10 @@ const nonTtyOutput = outputCollector();
 await assert.rejects(
   () => tuiCommand({ repo, run: runId, _: [] }, { inputStream: Readable.from(['q']), outputStream: nonTtyOutput.stream }),
   /requires an interactive terminal/,
+);
+await assert.rejects(
+  () => tuiCommand({ repo, run: runId, view: 'noisy', _: [] }, { inputStream: Readable.from(['q']), outputStream: nonTtyOutput.stream }),
+  /Invalid TUI view 'noisy'/,
 );
 
 const statusRun = await driveTui(

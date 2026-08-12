@@ -42,7 +42,8 @@
 
 Проверяет dependency-free terminal UI without a real terminal:
 
-- pure Overview, Events, Checkpoints and Review rendering;
+- pure Overview, Timeline, Checkpoints and Review rendering;
+- TUI detail modes (`simple`, `verbose`, `extended`) and raw hook filtering;
 - color/no-color rendering paths;
 - keyboard reducer for panels, movement, decisions and notes;
 - non-TTY rejection;
