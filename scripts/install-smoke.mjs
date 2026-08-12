@@ -8,8 +8,8 @@ import { runProcess } from '../.codex/delivery-kit/lib/git.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-async function run(command, args, cwd) {
-  const result = await runProcess(command, args, { cwd, timeoutMs: 60000 });
+async function run(command, args, cwd, { env = {} } = {}) {
+  const result = await runProcess(command, args, { cwd, env: { ...process.env, ...env }, timeoutMs: 60000 });
   assert.equal(result.code, 0, `${command} failed\n${result.stdout}\n${result.stderr}`);
   return result;
 }
@@ -28,8 +28,9 @@ async function main() {
     await run('git', ['add', '.'], temp);
     await run('git', ['commit', '-q', '-m', 'fixture'], temp);
 
-    await run(path.join(ROOT, 'scripts', 'install.sh'), [temp], ROOT);
-    await run(path.join(ROOT, 'scripts', 'install.sh'), [temp], ROOT);
+    const installEnv = { CODEX_DELIVERY_SKIP_RUNTIME_DEPS: '1' };
+    await run(path.join(ROOT, 'scripts', 'install.sh'), [temp], ROOT, { env: installEnv });
+    await run(path.join(ROOT, 'scripts', 'install.sh'), [temp], ROOT, { env: installEnv });
 
     const agents = await readFile(path.join(temp, 'AGENTS.md'), 'utf8');
     assert(agents.includes('Keep this line.'));
@@ -52,6 +53,8 @@ async function main() {
     assert.equal((ignore.match(/CODEX DELIVERY KIT BEGIN/g) ?? []).length, 1);
 
     await readFile(path.join(temp, '.codex', 'delivery-kit', 'cli.mjs'), 'utf8');
+    await readFile(path.join(temp, '.codex', 'delivery-kit', 'package.json'), 'utf8');
+    await readFile(path.join(temp, '.codex', 'delivery-kit', 'package-lock.json'), 'utf8');
     await readFile(path.join(temp, 'scripts', 'tui-smoke.mjs'), 'utf8');
     await readFile(path.join(temp, 'docs', 'codex-delivery', 'SYSTEM.md'), 'utf8');
     console.log('install-smoke: OK');

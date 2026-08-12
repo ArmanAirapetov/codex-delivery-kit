@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { elapsedPrefix, formatDuration } from './time-progress.mjs';
 
 const TERMINAL_EVENT_TYPES = new Set([
   'workflow.accepted',
@@ -10,14 +11,6 @@ const TERMINAL_EVENT_TYPES = new Set([
 
 function shortSha(value) {
   return value ? String(value).slice(0, 12) : 'n/a';
-}
-
-function duration(value) {
-  const ms = Number(value ?? 0);
-  if (!Number.isFinite(ms) || ms <= 0) return '0ms';
-  if (ms < 1000) return `${Math.round(ms)}ms`;
-  if (ms < 60_000) return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)}s`;
-  return `${Math.floor(ms / 60_000)}m${String(Math.round((ms % 60_000) / 1000)).padStart(2, '0')}s`;
 }
 
 function list(values, max = 5) {
@@ -66,7 +59,7 @@ export function isTerminalProgressEvent(event) {
   return TERMINAL_EVENT_TYPES.has(event?.type);
 }
 
-export function renderProgressLine(event, { verbose = false, repo = null } = {}) {
+function renderProgressBody(event, { verbose = false, repo = null } = {}) {
   if (!event?.type) return null;
   switch (event.type) {
     case 'workflow.started':
@@ -106,7 +99,7 @@ export function renderProgressLine(event, { verbose = false, repo = null } = {})
         `[agent] ${event.label} ${event.ok ? 'ok' : 'failed'}`,
         `role=${event.role}`,
         event.workstreamId ? `workstream=${event.workstreamId}` : '',
-        `duration=${duration(event.durationMs)}`,
+        `duration=${formatDuration(event.durationMs)}`,
         verbose ? usageSummary(event.usage) : '',
       ]);
     case 'codex.run.retry':
@@ -114,7 +107,7 @@ export function renderProgressLine(event, { verbose = false, repo = null } = {})
         `[agent] ${event.label} retrying`,
         `reason=${event.reason ?? 'transient failure'}`,
         `attempt=${event.nextAttempt ?? 2}/${event.totalAttempts ?? 2}`,
-        event.delayMs ? `delay=${duration(event.delayMs)}` : '',
+        event.delayMs ? `delay=${formatDuration(event.delayMs)}` : '',
       ]);
     case 'codex.result.invalid':
       return `[agent] ${event.label} invalid-result ${event.error ?? ''}`.trim();
@@ -217,7 +210,7 @@ export function renderProgressLine(event, { verbose = false, repo = null } = {})
       return details([
         `[validation] ${event.ok ? 'passed' : 'failed'}`,
         `exit=${event.exitCode}`,
-        `duration=${duration(event.durationMs)}`,
+        `duration=${formatDuration(event.durationMs)}`,
         verbose && event.logPath ? `log=${event.logPath}` : '',
         event.command,
       ]);
@@ -231,7 +224,7 @@ export function renderProgressLine(event, { verbose = false, repo = null } = {})
       return details([
         `[validation-setup] ${event.ok ? 'passed' : 'failed'}`,
         `exit=${event.exitCode}`,
-        `duration=${duration(event.durationMs)}`,
+        `duration=${formatDuration(event.durationMs)}`,
         verbose && event.logPath ? `log=${event.logPath}` : '',
         event.command,
       ]);
@@ -244,7 +237,7 @@ export function renderProgressLine(event, { verbose = false, repo = null } = {})
     case 'inspection.completed':
       return details([
         `[inspection] ${event.role} ${event.ok ? 'ok' : 'failed'}`,
-        `duration=${duration(event.durationMs)}`,
+        `duration=${formatDuration(event.durationMs)}`,
       ]);
     case 'inspection.mutations.discarded':
       return `[inspection] ${event.role} discarded mutations paths=${list(event.paths)}`;
@@ -296,11 +289,21 @@ export function renderProgressLine(event, { verbose = false, repo = null } = {})
   }
 }
 
-export function createProgressLogger({ enabled = true, verbose = false, repo = null, stream = process.stderr } = {}) {
+export function renderProgressLine(event, { verbose = false, repo = null, timeOrigin = null, noTime = false } = {}) {
+  const line = renderProgressBody(event, { verbose, repo });
+  return line ? `${elapsedPrefix(event, timeOrigin, { noTime })}${line}` : null;
+}
+
+export function createProgressLogger({ enabled = true, verbose = false, repo = null, stream = process.stderr, noTime = false } = {}) {
+  let timeOrigin = null;
   return {
+    setRunState(state) {
+      timeOrigin = state?.startedAt ?? timeOrigin;
+    },
     event(event) {
       if (!enabled) return;
-      const line = renderProgressLine(event, { verbose, repo });
+      timeOrigin ??= event?.at ?? null;
+      const line = renderProgressLine(event, { verbose, repo, timeOrigin, noTime });
       if (line) stream.write(`${line}\n`);
     },
   };

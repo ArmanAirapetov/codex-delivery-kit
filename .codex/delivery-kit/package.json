@@ -1,0 +1,13 @@
+{
+  "name": "codex-delivery-kit-runtime",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "ink": "7.1.1",
+    "react": "19.2.4"
+  }
+}

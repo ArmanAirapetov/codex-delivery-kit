@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { appendFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { computeRunTiming, formatDuration, phaseTransitionDurations } from './time-progress.mjs';
 
 export const TERMINAL_PHASES = new Set(['accepted', 'blocked', 'failed']);
 
@@ -438,6 +439,8 @@ export async function appendResult(repoRoot, state, result) {
 }
 
 export function renderSummary(state) {
+  const timing = computeRunTiming(state, [], state.background);
+  const transitions = phaseTransitionDurations(state);
   const lines = [
     `# Codex delivery run ${state.runId}`,
     '',
@@ -446,11 +449,25 @@ export function renderSummary(state) {
     `- **Base:** ${state.baseRef} (${state.baseCommit})`,
     `- **Started:** ${state.startedAt}`,
     `- **Finished:** ${state.finishedAt ?? '—'}`,
+    `- **Elapsed:** ${timing.elapsedMs === null ? '—' : formatDuration(timing.elapsedMs)}`,
     `- **Repair iteration:** ${state.repairIteration}/${state.maxRepairs}`,
+    '',
+    '## Timing',
+    '',
+    `- **Current phase age:** ${timing.phaseElapsedMs === null ? '—' : formatDuration(timing.phaseElapsedMs)}`,
+  ];
+  if (transitions.length) {
+    for (const segment of transitions) {
+      lines.push(`- **${segment.phase}:** ${formatDuration(segment.durationMs)}${segment.current ? ' (current)' : ''}`);
+    }
+  } else {
+    lines.push('_No phase timing recorded yet._');
+  }
+  lines.push(
     '',
     '## Acceptance criteria',
     '',
-  ];
+  );
   if (state.acceptanceCriteria.length === 0) lines.push('_Not defined._');
   for (const criterion of state.acceptanceCriteria) {
     const evidence = state.verification?.criteria?.find((item) => item.id === criterion.id);

@@ -40,17 +40,18 @@
 
 ### TUI smoke
 
-Проверяет dependency-free terminal UI without a real terminal:
+Проверяет Ink/React terminal UI without a real terminal:
 
-- pure Overview, Timeline, Checkpoints, Review and Workspace rendering;
-- ASCII progress bars for workstreams, validation, setup and reviews;
-- TUI detail modes (`simple`, `verbose`, `extended`) and raw hook filtering;
+- pure Cockpit, Review, Timeline, Workspace and Diagnostics rendering, including legacy panel aliases;
+- ASCII progress bars for overall progress, phase rails, workstreams, validation, setup and reviews;
+- elapsed timing, conservative ETA, status JSON telemetry and `--no-time` rendering;
+- TUI detail modes (`normal/detail/raw` and legacy `simple/verbose/extended`) with raw hook filtering;
 - color/no-color rendering paths;
 - keyboard reducer for panels, movement, decisions and notes;
 - non-TTY rejection and `tui --once` snapshot rendering;
 - dirty/saved review state, saved-review reuse, stale saved-review rejection and refresh preserving unsaved edits;
-- TUI resume gating before save, dirty workspace handling, `!` allow-dirty toggle, and single background-resume callback after saved repair decisions;
-- `status --tui`, `tui --panel events` and `review --tui`;
+- confirmation-gated save/resume, dirty workspace handling, `!` allow-dirty toggle, and single background-resume callback after saved repair decisions;
+- `status --tui`, `tui --panel timeline`, legacy `tui --panel events`, and `review --tui`;
 - alternate-screen enter/restore and raw-mode cleanup;
 - durable human-review artifact persistence from the TUI save action.
 
@@ -76,12 +77,14 @@
 ## 2. Запуск
 
 ```bash
+npm ci --prefix .codex/delivery-kit
 ./scripts/smoke-test.sh
 ```
 
 Отдельно:
 
 ```bash
+npm ci --prefix .codex/delivery-kit
 node scripts/validate.mjs
 node scripts/core-smoke.mjs
 node scripts/mcp-smoke.mjs

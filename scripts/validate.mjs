@@ -48,6 +48,7 @@ async function main() {
   const required = [
     'AGENTS.md', '.codex/config.toml', 'codex-delivery.config.json',
     '.codex/delivery-kit/cli.mjs', '.codex/delivery-kit/mcp-server.mjs',
+    '.codex/delivery-kit/package.json', '.codex/delivery-kit/package-lock.json',
     '.agents/skills/codex-delivery/SKILL.md', 'scripts/codex-delivery',
   ];
   for (const relative of required) await access(path.join(ROOT, relative));
@@ -89,9 +90,16 @@ async function main() {
   const wrapper = await stat(path.join(ROOT, 'scripts', 'codex-delivery'));
   assert(wrapper.isFile());
   const readme = await readFile(path.join(ROOT, readmePath), 'utf8');
+  assert(readme.includes('Node.js 22+'), 'README must document the Node.js 22+ runtime requirement.');
+  assert(readme.includes('Ink/React'), 'README must document the bundled Ink/React TUI runtime.');
   for (const referenced of ['scripts/install.sh', 'scripts/validate.mjs', 'scripts/mcp-smoke.mjs', 'scripts/smoke-test.sh']) {
     assert(readme.includes(referenced.split('/').at(-1)) || readme.includes(referenced), `README does not describe ${referenced}`);
   }
+
+  const runtimePackage = JSON.parse(await readFile(path.join(ROOT, '.codex', 'delivery-kit', 'package.json'), 'utf8'));
+  assert.equal(runtimePackage.engines?.node, '>=22', 'Runtime package must declare Node.js >=22 for current Ink.');
+  assert.equal(runtimePackage.dependencies?.ink, '7.1.1', 'Runtime package must pin Ink.');
+  assert.equal(runtimePackage.dependencies?.react, '19.2.4', 'Runtime package must pin React.');
 
   console.log(`validate: OK (${mjsFiles.length} JavaScript modules, ${jsonFiles.length} JSON files, ${agents.length} agents)`);
 }

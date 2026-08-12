@@ -14,9 +14,14 @@ USAGE
   [[ -n "$TARGET_INPUT" ]] && exit 0 || exit 2
 fi
 
-for command in git node python3; do
+for command in git node npm python3; do
   command -v "$command" >/dev/null 2>&1 || { echo "[error] Required command is missing: $command" >&2; exit 1; }
 done
+NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
+if (( NODE_MAJOR < 22 )); then
+  echo "[error] Node.js 22+ is required for the bundled Ink/React TUI runtime. Current: $(node --version)" >&2
+  exit 1
+fi
 
 TARGET="$(cd -- "$TARGET_INPUT" && pwd)"
 REPO="$(git -C "$TARGET" rev-parse --show-toplevel 2>/dev/null || true)"
@@ -55,6 +60,7 @@ copy_if_absent() {
 
 # Runtime and schemas are versioned as one unit.
 copy_replace ".codex/delivery-kit"
+rm -rf -- "$REPO/.codex/delivery-kit/node_modules"
 copy_replace "delivery/schemas"
 
 # Project custom agents. Preserve unrelated agent files.
@@ -198,6 +204,7 @@ text = path.read_text(encoding="utf-8") if path.exists() else ""
 block = "\n".join([
     begin,
     ".codex/delivery-runs/",
+    ".codex/delivery-kit/node_modules/",
     ".codex/hook-events/",
     ".codex-delivery-backups/",
     ".codex-delivery-worktrees/",
@@ -211,6 +218,12 @@ else:
     text = text.rstrip() + ("\n\n" if text.strip() else "") + block + "\n"
 path.write_text(text, encoding="utf-8")
 PY
+
+if [[ "${CODEX_DELIVERY_SKIP_RUNTIME_DEPS:-0}" == "1" ]]; then
+  echo "[warn] Skipping Codex Delivery Kit runtime dependency install."
+else
+  npm ci --omit=dev --prefix "$REPO/.codex/delivery-kit"
+fi
 
 node "$SOURCE_ROOT/scripts/validate.mjs" >/dev/null
 

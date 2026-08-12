@@ -19,6 +19,8 @@ import {
   saveState,
 } from '../.codex/delivery-kit/lib/core.mjs';
 import { git } from '../.codex/delivery-kit/lib/git.mjs';
+import { renderProgressLine } from '../.codex/delivery-kit/lib/progress.mjs';
+import { computeRunTelemetry, formatDuration } from '../.codex/delivery-kit/lib/time-progress.mjs';
 import {
   applyTuiKey,
   createTuiModel,
@@ -207,20 +209,30 @@ assert.equal(inbox.items.length, 3);
 
 const events = (await readFile(runPaths(repo, runId).events, 'utf8')).trim().split(/\r?\n/).map((line) => JSON.parse(line));
 let model = createTuiModel({ repo, runId, state, inbox, events, noColor: true });
-const overview = renderTuiScreen(model, { width: 100, height: 30 });
-assert.match(overview, /Codex Delivery TUI/);
-assert.match(overview, /TUI smoke blocked delivery/);
-assert.match(overview, /Next Action/);
-assert.match(overview, /3 review items need a decision/);
-assert.match(overview, /Recommended: open Review/);
-assert.match(overview, /Review state: Not saved yet/);
-assert.match(overview, /Resume disabled: Save review decisions before resume/);
-assert.match(overview, /Validation:/);
-assert.match(overview, /Progress/);
-assert.match(overview, /Workstreams \[#+\] 2\/2/);
-assert.match(overview, /Validation\s+\[[#!-]+\] 1\/2/);
-assert.doesNotMatch(overview, /faileds|approveds|not approveds/);
-assert.equal(stripAnsi(overview), overview);
+const cockpit = renderTuiScreen(model, { width: 100, height: 30 });
+assert.match(cockpit, /Codex Delivery TUI/);
+assert.match(cockpit, /Autopilot Cockpit/);
+assert.match(cockpit, /TUI smoke blocked delivery/);
+assert.match(cockpit, /3 review items need a decision/);
+assert.match(cockpit, /Recommended: open Review/);
+assert.match(cockpit, /Progress/);
+assert.match(cockpit, /Time/);
+assert.match(cockpit, /ETA unknown/);
+assert.match(cockpit, /Intervention Queue \(1\)/);
+assert.match(cockpit, /Save default repair approvals/);
+assert.match(cockpit, /Overall \[#+\] 99\/100/);
+assert.match(cockpit, /validation\s+\[#+\] 100\/100/);
+assert.doesNotMatch(cockpit, /faileds|approveds|not approveds/);
+assert.equal(stripAnsi(cockpit), cockpit);
+assert.equal(model.panel, 'cockpit');
+assert.equal(model.telemetry.progress.percent, 99);
+assert.equal(model.telemetry.eta.confidence, 'none');
+assert.equal(formatDuration(62_000), '1m02s');
+const telemetry = computeRunTelemetry(state, events);
+assert.equal(telemetry.progress.percent, 99);
+assert.ok(Number.isFinite(telemetry.timing.elapsedMs));
+assert.match(renderProgressLine(events[0], { timeOrigin: state.startedAt }), /^\[\+/);
+assert.doesNotMatch(renderProgressLine(events[0], { timeOrigin: state.startedAt, noTime: true }), /^\[\+/);
 
 const previousForceColor = process.env.FORCE_COLOR;
 const previousNoColor = process.env.NO_COLOR;
@@ -234,8 +246,8 @@ else process.env.FORCE_COLOR = previousForceColor;
 if (previousNoColor === undefined) delete process.env.NO_COLOR;
 else process.env.NO_COLOR = previousNoColor;
 
-model = applyTuiKey(model, '2').model;
-assert.equal(model.panel, 'events');
+model = applyTuiKey(model, '3').model;
+assert.equal(model.panel, 'timeline');
 const simpleTimeline = renderTuiScreen(model, { width: 100, height: 22 });
 assert.match(simpleTimeline, /Timeline \(/);
 assert.match(simpleTimeline, /Operator timeline/);
@@ -249,20 +261,21 @@ assert.equal(model.viewMode, 'extended');
 assert.match(renderTuiScreen(model, { width: 100, height: 22 }), /Raw Events/);
 model = applyTuiKey(model, 'v').model;
 assert.equal(model.viewMode, 'simple');
-model = applyTuiKey(model, '3').model;
-assert.equal(model.panel, 'checkpoints');
-const checkpoints = renderTuiScreen(model, { width: 120, height: 24 });
-assert.match(checkpoints, /\[validation\] \[[#!-]+\] 1\/2 passed, 1 failed/);
-assert.match(checkpoints, /\[reviews\] \[[#!-]+\] 1\/2 approved, 1 not approved/);
-assert.match(checkpoints, /\[review\] reviewer changes_requested findings=1/);
-assert.match(checkpoints, /\[final\] blocked/);
 model = applyTuiKey(model, '5').model;
+assert.equal(model.panel, 'diagnostics');
+const diagnostics = renderTuiScreen(model, { width: 120, height: 24 });
+assert.match(diagnostics, /Diagnostics/);
+assert.match(diagnostics, /\[validation\] \[[#!-]+\] 1\/2 passed, 1 failed/);
+assert.match(diagnostics, /\[reviews\] \[[#!-]+\] 1\/2 approved, 1 not approved/);
+assert.match(diagnostics, /\[review\] reviewer changes_requested findings=1/);
+assert.match(diagnostics, /\[final\] blocked/);
+model = applyTuiKey(model, '4').model;
 assert.equal(model.panel, 'workspace');
 assert.match(renderTuiScreen(model, { width: 120, height: 24 }), /Working tree clean/);
 model = applyTuiKey(model, '!').model;
 assert.equal(model.allowDirty, false);
 assert.match(model.message, /clean/);
-model = applyTuiKey(model, '4').model;
+model = applyTuiKey(model, '2').model;
 assert.equal(model.panel, 'review');
 const reviewScreen = renderTuiScreen(model, { width: 120, height: 30 });
 assert.match(reviewScreen, /Review Inbox \(3\)/);
@@ -356,7 +369,9 @@ const saveThenResume = await driveTui(
   }),
   [
     { key: 's', wait: 150 },
+    { key: 'y', wait: 150 },
     { key: 'R', wait: 150 },
+    { key: 'y', wait: 150 },
     'q',
   ],
 );
@@ -391,13 +406,14 @@ const dirtyRepoBlocked = await driveTui(
   }),
   [
     { key: 's', wait: 150 },
+    { key: 'y', wait: 150 },
     'R',
     'q',
   ],
 );
 assert.equal(dirtyResumeCalls, 0);
 assert.match(dirtyRepoBlocked.output, /Repository has uncommitted changes/);
-assert.match(dirtyRepoBlocked.output, /Press 5 for Workspace/);
+assert.match(dirtyRepoBlocked.output, /Press 4 for Workspace/);
 
 const dirtyWorkspace = await driveTui(
   ({ input, output }) => runTerminalTui({
@@ -423,12 +439,13 @@ const dirtyWorkspace = await driveTui(
     refreshMs: 5000,
   }),
   [
-    '5',
-    '!',
-    { key: 's', wait: 50 },
     '4',
+    '!',
+    '2',
     { key: 's', wait: 150 },
+    { key: 'y', wait: 150 },
     { key: 'R', wait: 150 },
+    { key: 'y', wait: 150 },
     'q',
   ],
 );
@@ -463,7 +480,9 @@ const dirtyRepoAllowed = await driveTui(
   }),
   [
     { key: 's', wait: 150 },
+    { key: 'y', wait: 150 },
     { key: 'R', wait: 150 },
+    { key: 'y', wait: 150 },
     'q',
   ],
 );
@@ -509,11 +528,19 @@ const statusRun = await driveTui(
   ['q'],
 );
 assert.match(statusRun.output, /Codex Delivery TUI/);
-assert.match(statusRun.output, /Overview/);
-assert.match(statusRun.output, /Control Points/);
+assert.match(statusRun.output, /Autopilot Cockpit/);
+assert.match(statusRun.output, /Intervention Queue/);
 assert.ok(statusRun.output.includes('\u001b[?1049h'));
 assert.ok(statusRun.output.includes('\u001b[?1049l'));
 assert.deepEqual(statusRun.input.rawModeChanges, [true, false]);
+
+const statusJson = outputCollector();
+await statusCommand({ repo, run: runId, json: true, _: [] }, { outputStream: statusJson.stream });
+const statusPayload = JSON.parse(statusJson.text());
+assert.equal(statusPayload.progress.percent, 99);
+assert.equal(statusPayload.eta.confidence, 'none');
+assert.ok(Number.isFinite(statusPayload.timing.elapsedMs));
+assert.ok(statusPayload.timing.lastEventAt);
 
 const eventRun = await driveTui(
   ({ input, output }) => tuiCommand({ repo, run: runId, panel: 'events', noColor: true, _: [] }, { inputStream: input, outputStream: output }),
@@ -531,6 +558,14 @@ assert.match(onceOutput.text(), /Review Inbox/);
 assert.match(onceOutput.text(), /Not saved yet/);
 assert.doesNotMatch(onceOutput.text(), /\u001b\[\?1049h/);
 
+const noTimeOutput = outputCollector();
+await tuiCommand(
+  { repo, run: runId, once: true, noColor: true, noTime: true, _: [] },
+  { inputStream: Readable.from([]), outputStream: noTimeOutput.stream },
+);
+assert.match(noTimeOutput.text(), /Autopilot Cockpit/);
+assert.doesNotMatch(noTimeOutput.text(), /^Time$/m);
+
 const reviewRun = await driveTui(
   ({ input, output }) => reviewCommand({ repo, run: runId, tui: true, noColor: true, _: [] }, { inputStream: input, outputStream: output }),
   [
@@ -539,6 +574,7 @@ const reviewRun = await driveTui(
     ...'Approved by TUI'.split(''),
     '\r',
     { key: 's', wait: 250 },
+    { key: 'y', wait: 250 },
     'q',
   ],
 );

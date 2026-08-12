@@ -59,7 +59,8 @@ import {
   workerPrompt,
 } from './lib/prompts.mjs';
 import { createProgressLogger, isTerminalProgressEvent, renderProgressLine } from './lib/progress.mjs';
-import { runTerminalTui, TUI_VIEW_MODES } from './lib/tui.mjs';
+import { runTerminalTui, TUI_VIEW_ALIASES, TUI_VIEW_MODES } from './lib/tui.mjs';
+import { computeRunTelemetry } from './lib/time-progress.mjs';
 
 const KIT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SCHEMA_ROOT = path.join(KIT_ROOT, 'delivery', 'schemas');
@@ -77,6 +78,7 @@ const BOOLEAN_OPTIONS = new Set([
   'logs',
   'noColor',
   'noAutoInstallDeps',
+  'noTime',
   'once',
   'quiet',
   'raw',
@@ -356,6 +358,7 @@ async function loadConfig(repo, options) {
 }
 
 function attachProgress(state, config) {
+  config?.progress?.setRunState?.(state);
   attachEventSink(state, config?.progress?.event);
   return state;
 }
@@ -366,6 +369,7 @@ function configureProgress(repo, options, stream = process.stderr) {
     verbose: Boolean(options.verbose),
     repo,
     stream,
+    noTime: Boolean(options.noTime),
   });
 }
 
@@ -2484,13 +2488,13 @@ function buildTuiReviewSession({ state, inbox, model }) {
   };
 }
 
-export async function tuiCommand(options, { inputStream = process.stdin, outputStream = process.stdout, initialPanel = options.panel ?? 'overview' } = {}) {
+export async function tuiCommand(options, { inputStream = process.stdin, outputStream = process.stdout, initialPanel = options.panel ?? 'cockpit' } = {}) {
   const repo = await repositoryRootFor(await repoCwdFromOptions(options));
   const runId = options.run || await latestRunId(repo);
   if (!runId) throw new Error('No delivery run selected.');
-  const viewMode = options.view ?? options.tuiView ?? 'simple';
+  const viewMode = TUI_VIEW_ALIASES[options.view ?? options.tuiView] ?? options.view ?? options.tuiView ?? 'simple';
   if (!TUI_VIEW_MODES.includes(viewMode)) {
-    throw new UserFacingError(`Invalid TUI view '${viewMode}'. Use one of: ${TUI_VIEW_MODES.join(', ')}.`);
+    throw new UserFacingError(`Invalid TUI view '${viewMode}'. Use one of: ${TUI_VIEW_MODES.join(', ')} (aliases: ${Object.keys(TUI_VIEW_ALIASES).join(', ')}).`);
   }
 
   const load = async () => {
@@ -2548,13 +2552,15 @@ export async function tuiCommand(options, { inputStream = process.stdin, outputS
     initialPanel,
     viewMode,
     noColor: Boolean(options.noColor),
+    noTime: Boolean(options.noTime),
     once: Boolean(options.once),
   });
 }
 
-function statusJsonPayload(repo, runId, state, background) {
+function statusJsonPayload(repo, runId, state, background, events = []) {
   const criteriaEvidence = new Map((state.verification?.criteria ?? []).map((item) => [item.id, item]));
   const backgroundStale = backgroundIsStale(background);
+  const telemetry = computeRunTelemetry(state, events, background);
   return {
     runId,
     phase: state.phase,
@@ -2592,6 +2598,9 @@ function statusJsonPayload(repo, runId, state, background) {
     reviews: state.reviews,
     humanReviews: state.humanReviews ?? [],
     final: state.final,
+    timing: telemetry.timing,
+    progress: telemetry.progress,
+    eta: telemetry.eta,
     background: background ? {
       ...background,
       effectiveStatus: backgroundStale ? 'stale' : background.status ?? 'unknown',
@@ -2614,11 +2623,12 @@ export async function statusCommand(options, { inputStream = process.stdin, outp
   const state = await loadState(repo, runId);
   const background = await readBackgroundRecord(repo, runId);
   if (options.json) {
-    outputStream.write(`${JSON.stringify(statusJsonPayload(repo, runId, state, background), null, 2)}\n`);
+    const events = await readRunEventHistory(repo, runId);
+    outputStream.write(`${JSON.stringify(statusJsonPayload(repo, runId, state, background, events), null, 2)}\n`);
     return state;
   }
   if (options.tui) {
-    return tuiCommand(options, { inputStream, outputStream, initialPanel: 'overview' });
+    return tuiCommand(options, { inputStream, outputStream, initialPanel: 'cockpit' });
   }
   let output = `${await readFile(runPaths(repo, runId).summary, 'utf8')}\n`;
   if (background) {
@@ -2692,7 +2702,7 @@ function parseTailOption(options) {
   return value;
 }
 
-function renderEventLines(text, { verbose, repo, tail = null } = {}) {
+function renderEventLines(text, { verbose, repo, tail = null, timeOrigin = null, noTime = false } = {}) {
   let lines = text.split(/\r?\n/).filter((line) => line.trim());
   if (tail !== null) lines = tail === 0 ? [] : lines.slice(-tail);
   let terminalSeen = false;
@@ -2700,7 +2710,7 @@ function renderEventLines(text, { verbose, repo, tail = null } = {}) {
     try {
       const event = JSON.parse(line);
       terminalSeen ||= isTerminalProgressEvent(event);
-      const rendered = renderProgressLine(event, { verbose, repo });
+      const rendered = renderProgressLine(event, { verbose, repo, timeOrigin, noTime });
       if (rendered) process.stdout.write(`${rendered}\n`);
     } catch {
       // Ignore corrupt event records; raw artifacts remain available for manual inspection.
@@ -2715,6 +2725,9 @@ async function logsCommand(options) {
   if (!runId) throw new Error('No delivery runs found.');
   const eventsPath = runPaths(repo, runId).events;
   const verbose = Boolean(options.verbose);
+  const noTime = Boolean(options.noTime);
+  const stateForTiming = await loadState(repo, runId).catch(() => null);
+  const timeOrigin = stateForTiming?.startedAt ?? null;
   const tail = parseTailOption(options);
   let offset = 0;
   let pending = '';
@@ -2730,7 +2743,7 @@ async function logsCommand(options) {
       try {
         const event = JSON.parse(line);
         terminalSeen ||= isTerminalProgressEvent(event);
-        const rendered = renderProgressLine(event, { verbose, repo });
+        const rendered = renderProgressLine(event, { verbose, repo, timeOrigin, noTime });
         if (rendered) {
           process.stdout.write(`${rendered}\n`);
         }
@@ -2745,7 +2758,7 @@ async function logsCommand(options) {
   } else {
     const snapshot = await readEventsSnapshot(eventsPath);
     offset = snapshot.offset;
-    renderEventLines(snapshot.text, { verbose, repo, tail });
+    renderEventLines(snapshot.text, { verbose, repo, tail, timeOrigin, noTime });
   }
   if (!options.follow) return;
   while (true) {
@@ -2843,7 +2856,7 @@ Usage:
   node .codex/delivery-kit/cli.mjs review [--repo <path>] [--run <id>] --tui
   node .codex/delivery-kit/cli.mjs status [--repo <path>] [--run <id>] [--json]
   node .codex/delivery-kit/cli.mjs status [--repo <path>] [--run <id>] --tui
-  node .codex/delivery-kit/cli.mjs tui [--repo <path>] [--run <id>] [--panel overview|events|checkpoints|review|workspace] [--view simple|verbose|extended] [--once]
+  node .codex/delivery-kit/cli.mjs tui [--repo <path>] [--run <id>] [--panel cockpit|review|timeline|workspace|diagnostics] [--view simple|verbose|extended] [--once]
   node .codex/delivery-kit/cli.mjs report [--repo <path>] [--run <id>]
   node .codex/delivery-kit/cli.mjs stop [--repo <path>] [--run <id>]
   node .codex/delivery-kit/cli.mjs cleanup [--repo <path>] [--run <id>] [--integration] [--logs]
@@ -2860,12 +2873,14 @@ Run/resume options:
   --all                 With logs --follow, print full history before following
   --json                Print machine-readable output for review/status
   --tui                 Open the interactive terminal UI for status or review
-  --panel <name>        Initial TUI panel: overview, events, checkpoints, review, workspace
-  --view <mode>         TUI detail level: simple, verbose, extended
+  --panel <name>        Initial TUI panel: cockpit, review, timeline, workspace, diagnostics
+                        Legacy aliases: overview, events, checkpoints
+  --view <mode>         TUI detail level: simple/normal, verbose/detail, extended/raw
   --once                Render one TUI frame without requiring an interactive terminal
   --quiet               Suppress live progress output
   --verbose             Print additional sanitized progress details
   --no-color            Disable colorized terminal output
+  --no-time             Hide elapsed-time prefixes in human progress/log/TUI output
   --no-auto-install-deps
                         Do not auto-prepare checked-in project deps after human approval
   --raw                 Retain raw Codex JSONL in addition to sanitized events

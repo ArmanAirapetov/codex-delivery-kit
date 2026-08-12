@@ -1,22 +1,36 @@
-import readline from 'node:readline';
-import { setTimeout as delay } from 'node:timers/promises';
+import React from 'react';
+import { Box, Text, render as renderInk, renderToString, useApp, useInput, useWindowSize } from 'ink';
 import { renderProgressLine } from './progress.mjs';
+import { computeRunTelemetry, formatAge, formatDuration as formatRunDuration, timestampMs } from './time-progress.mjs';
 
-export const TUI_PANELS = ['overview', 'events', 'checkpoints', 'review', 'workspace'];
+const { useEffect, useRef, useState } = React;
+const h = React.createElement;
+
+export const TUI_PANELS = ['cockpit', 'review', 'timeline', 'workspace', 'diagnostics'];
+export const TUI_PANEL_ALIASES = {
+  overview: 'cockpit',
+  events: 'timeline',
+  checkpoints: 'diagnostics',
+};
 export const TUI_VIEW_MODES = ['simple', 'verbose', 'extended'];
+export const TUI_VIEW_ALIASES = {
+  normal: 'simple',
+  detail: 'verbose',
+  raw: 'extended',
+};
 
 const PANEL_LABELS = {
-  overview: 'Overview',
-  events: 'Timeline',
-  checkpoints: 'Checkpoints',
+  cockpit: 'Cockpit',
+  timeline: 'Timeline',
+  diagnostics: 'Diagnostics',
   review: 'Review',
   workspace: 'Workspace',
 };
 
 const VIEW_LABELS = {
-  simple: 'simple',
-  verbose: 'verbose',
-  extended: 'extended',
+  simple: 'normal',
+  verbose: 'detail',
+  extended: 'raw',
 };
 
 export const TUI_DECISIONS = {
@@ -211,7 +225,13 @@ function progressBar(done, total, { width = 22, failed = 0, theme = null } = {})
 }
 
 function normalizeViewMode(value) {
-  return TUI_VIEW_MODES.includes(value) ? value : 'simple';
+  const mode = TUI_VIEW_ALIASES[value] ?? value;
+  return TUI_VIEW_MODES.includes(mode) ? mode : 'simple';
+}
+
+function normalizePanel(value) {
+  const panel = TUI_PANEL_ALIASES[value] ?? value;
+  return TUI_PANELS.includes(panel) ? panel : 'cockpit';
 }
 
 function nextViewMode(value) {
@@ -306,6 +326,12 @@ function reviewDirty(model) {
   });
 }
 
+function withDerivedTuiFields(model) {
+  const telemetry = computeRunTelemetry(model.state, model.events ?? [], model.background);
+  const enriched = { ...model, telemetry };
+  return { ...enriched, interventionItems: buildInterventionItems(enriched) };
+}
+
 function withReviewState(model, patch = {}) {
   const pendingDecisions = patch.pendingDecisions ?? model.pendingDecisions ?? model.decisions ?? initialDecisionMap(model.inbox);
   const pendingNotes = patch.pendingNotes ?? model.pendingNotes ?? model.notes ?? {};
@@ -317,7 +343,7 @@ function withReviewState(model, patch = {}) {
     decisions: pendingDecisions,
     notes: pendingNotes,
   };
-  return { ...next, dirty: reviewDirty(next) };
+  return withDerivedTuiFields({ ...next, dirty: reviewDirty(next) });
 }
 
 function hasRepairRequest(model) {
@@ -339,7 +365,7 @@ function resumeDisabledReason(model) {
   if (model.dirty) return 'Save unsaved review changes before resume.';
   if (!hasRepairRequest(model)) return 'No saved decision asks Codex to repair.';
   if (resumeRunning(model)) return 'Resume is already starting or running.';
-  if (model.repoDirty && !model.allowDirty) return 'Repository has uncommitted changes. Press 5 for Workspace, press ! to allow dirty resume, or commit/stash changes.';
+  if (model.repoDirty && !model.allowDirty) return 'Repository has uncommitted changes. Press 4 for Workspace, press ! to allow dirty resume, or commit/stash changes.';
   return null;
 }
 
@@ -386,20 +412,23 @@ function clamp(value, min, max) {
 }
 
 function selectedIndex(model, panel = model.panel) {
-  return Number(model.selected?.[panel] ?? 0);
+  return Number(model.selected?.[normalizePanel(panel)] ?? 0);
 }
 
 function maxSelection(model, panel = model.panel) {
-  if (panel === 'events') return Math.max(0, eventEntries(model).length - 1);
-  if (panel === 'checkpoints') return Math.max(0, checkpointLines(model, null).length - 1);
-  if (panel === 'review') return Math.max(0, (model.inbox?.items ?? []).length - 1);
-  if (panel === 'workspace') return Math.max(0, (model.dirtyEntries ?? []).length - 1);
+  const normalized = normalizePanel(panel);
+  if (normalized === 'cockpit') return Math.max(0, (model.interventionItems ?? []).length - 1);
+  if (normalized === 'timeline') return Math.max(0, eventEntries(model).length - 1);
+  if (normalized === 'diagnostics') return Math.max(0, diagnosticsLines(model, null).length - 1);
+  if (normalized === 'review') return Math.max(0, (model.inbox?.items ?? []).length - 1);
+  if (normalized === 'workspace') return Math.max(0, (model.dirtyEntries ?? []).length - 1);
   return 0;
 }
 
 function setSelection(model, panel, value) {
+  const normalized = normalizePanel(panel);
   const selected = { ...model.selected };
-  selected[panel] = clamp(value, 0, maxSelection(model, panel));
+  selected[normalized] = clamp(value, 0, maxSelection(model, normalized));
   return { ...model, selected };
 }
 
@@ -431,18 +460,19 @@ export function createTuiModel({
   background = null,
   inbox = null,
   events = [],
-  initialPanel = 'overview',
+  initialPanel = 'cockpit',
   viewMode = 'simple',
   dirtyEntries = [],
   allowDirty = false,
   noColor = false,
+  noTime = false,
   message = null,
 } = {}) {
-  const panel = TUI_PANELS.includes(initialPanel) ? initialPanel : 'overview';
+  const panel = normalizePanel(initialPanel);
   const baseline = reviewBaseline(state, inbox);
   const pendingDecisions = { ...baseline.pendingDecisions };
   const pendingNotes = { ...baseline.pendingNotes };
-  return {
+  return withDerivedTuiFields({
     repo,
     runId: runId ?? state?.runId ?? inbox?.runId ?? null,
     state,
@@ -451,7 +481,7 @@ export function createTuiModel({
     events: events.slice(-300),
     panel,
     viewMode: normalizeViewMode(viewMode),
-    selected: { overview: 0, events: 0, checkpoints: 0, review: 0 },
+    selected: { cockpit: 0, review: 0, timeline: 0, workspace: 0, diagnostics: 0 },
     ...baseline,
     pendingDecisions,
     pendingNotes,
@@ -467,7 +497,10 @@ export function createTuiModel({
     allowDirty: Boolean(allowDirty),
     message,
     noColor: Boolean(noColor),
-  };
+    noTime: Boolean(noTime),
+    confirmAction: null,
+    helpVisible: false,
+  });
 }
 
 function mergeModel(previous, next) {
@@ -492,6 +525,9 @@ function mergeModel(previous, next) {
     allowDirty: previous.allowDirty,
     message: sameReview ? previous.message : 'Review inbox changed; pending decisions were reloaded.',
     noColor: previous.noColor,
+    noTime: previous.noTime,
+    confirmAction: sameReview ? previous.confirmAction : null,
+    helpVisible: previous.helpVisible,
   });
   for (const panel of TUI_PANELS) {
     merged.selected[panel] = clamp(Number(merged.selected[panel] ?? 0), 0, maxSelection(merged, panel));
@@ -510,18 +546,29 @@ function headerLines(model, theme) {
   const state = model.state ?? {};
   const backgroundStatus = model.background?.status ?? 'none';
   const alive = model.background?.alive === true || model.background?.pid ? ` pid=${model.background.pid ?? '?'}` : '';
+  const telemetry = model.telemetry ?? computeRunTelemetry(state, model.events ?? [], model.background);
+  const timing = model.noTime
+    ? ''
+    : ` elapsed=${durationText(telemetry.timing?.elapsedMs)} phase=${durationText(telemetry.timing?.phaseElapsedMs)} ${etaText(telemetry.eta)}`;
   const tabs = TUI_PANELS.map((panel, index) => {
     const label = `${index + 1} ${PANEL_LABELS[panel]}`;
     return panel === model.panel ? theme.bold(theme.blue(`[${label}]`)) : theme.dim(label);
   }).join('  ');
   return [
-    `${theme.bold('Codex Delivery TUI')} ${theme.dim('|')} ${model.runId ?? 'no-run'} ${theme.dim('|')} phase=${theme.phase(state.phase)} repair=${state.repairIteration ?? 0}/${state.maxRepairs ?? 0} view=${VIEW_LABELS[model.viewMode] ?? model.viewMode}`,
+    `${theme.bold('Codex Delivery TUI')} ${theme.dim('|')} ${model.runId ?? 'no-run'} ${theme.dim('|')} phase=${theme.phase(state.phase)} repair=${state.repairIteration ?? 0}/${state.maxRepairs ?? 0} progress=${telemetry.progress?.percent ?? 0}% view=${VIEW_LABELS[model.viewMode] ?? model.viewMode}${timing}`,
     `${tabs}  ${theme.dim(`background=${backgroundStatus}${alive}`)}`,
     '-'.repeat(80),
   ];
 }
 
 function footerLines(model, theme) {
+  if (model.confirmAction) {
+    return [
+      '-'.repeat(80),
+      `${theme.yellow('confirm:')} ${model.confirmAction.prompt}  y confirm, Esc/n cancel`,
+      model.message ? `${theme.bold('status:')} ${model.message}` : null,
+    ].filter(Boolean);
+  }
   if (model.noteEditing) {
     return [
       '-'.repeat(80),
@@ -529,8 +576,8 @@ function footerLines(model, theme) {
       model.message ? `${theme.bold('status:')} ${model.message}` : null,
     ].filter(Boolean);
   }
-  const common = '1 overview, 2 timeline, 3 checkpoints, 4 review, 5 workspace, v view, q quit';
-  const navigation = ['events', 'checkpoints', 'review', 'workspace'].includes(model.panel) ? ', j/k or arrows move' : '';
+  const common = '1 cockpit, 2 review, 3 timeline, 4 workspace, 5 diagnostics, v view, ? help, q quit';
+  const navigation = ['cockpit', 'timeline', 'diagnostics', 'review', 'workspace'].includes(model.panel) ? ', j/k or arrows move' : '';
   const resume = canResumeFromTui(model) ? ', R resume' : '';
   const dirty = model.repoDirty ? ', ! allow-dirty' : '';
   const note = model.panel === 'review'
@@ -605,7 +652,7 @@ function nextActionLines(model, validation, reviews, theme) {
     if (model.dirty) {
       return [
         reviewPersistenceLine(model, theme),
-        'Recommended: press 4 to review pending choices, then s to save them.',
+        'Recommended: press 2 to review pending choices, then s to save them.',
       ];
     }
     if (model.reviewSaved) {
@@ -614,7 +661,7 @@ function nextActionLines(model, validation, reviews, theme) {
         return [
           reviewPersistenceLine(model, theme),
           theme.yellow('Repository has uncommitted changes, so background resume is blocked by default.'),
-          `Recommended: press 5 to inspect Workspace, then commit/stash changes or press ! to allow dirty resume.`,
+          `Recommended: press 4 to inspect Workspace, then commit/stash changes or press ! to allow dirty resume.`,
         ];
       }
       return [
@@ -635,7 +682,7 @@ function nextActionLines(model, validation, reviews, theme) {
   if (validation.failed > 0) {
     return [
       theme.red(`${validation.failed} validation command failed.`),
-      'Recommended: open Review for failure classification or inspect Timeline/Checkpoints for the failing command.',
+      'Recommended: open Review for failure classification or inspect Timeline/Diagnostics for the failing command.',
     ];
   }
   if (reviews.failed > 0) {
@@ -649,49 +696,242 @@ function nextActionLines(model, validation, reviews, theme) {
   return ['No operator action is required right now.'];
 }
 
-function renderOverview(model, theme) {
+function decisionCountsText(items, decisions) {
+  const counts = countBy(items.map((item) => decisionValue(decisions, item)));
+  return Object.entries(counts)
+    .map(([decision, count]) => `${count} ${TUI_DECISIONS[decision]?.label ?? decision}`)
+    .join(', ');
+}
+
+function buildInterventionItems(model) {
+  const queue = [];
   const state = model.state ?? {};
+  const items = model.inbox?.items ?? [];
   const validation = validationSummary(state.validation?.runs ?? []);
   const reviews = reviewSummary(state.reviews ?? []);
-  const humanReviews = state.humanReviews?.length ?? 0;
-  const final = state.final?.summary ?? 'No final summary yet.';
-  const workstreams = state.workstreams ?? [];
-  const integrated = workstreams.filter((item) => item.status === 'integrated').length;
-  const active = workstreams.filter((item) => ['pending', 'running'].includes(item.status)).length;
-  const setupRuns = state.validation?.setupRuns ?? [];
-  const setupSummary = setupRuns.length
-    ? `${setupRuns.filter((run) => run.ok).length}/${setupRuns.length} setup passed`
-    : 'no validation setup';
-  const nextAction = nextActionLines(model, validation, reviews, theme);
-  return [
-    theme.bold('Next Action'),
+  const blocked = ['blocked', 'failed'].includes(state.phase);
+  const allRepair = items.length > 0 && items.every((item) => decisionValue(model.pendingDecisions, item) === 'repair_requested');
+  if (blocked && items.length) {
+    if (!model.reviewSaved || model.dirty) {
+      queue.push({
+        id: 'save-review',
+        severity: model.dirty ? 'high' : 'medium',
+        title: model.dirty ? 'Save review changes' : allRepair ? 'Save default repair approvals' : 'Save review decisions',
+        summary: `${countPhrase(items.length, 'review item')} selected as ${decisionCountsText(items, model.pendingDecisions) || 'none'}.`,
+        panel: 'review',
+        action: 'save',
+      });
+    } else if (canResumeFromTui(model)) {
+      queue.push({
+        id: 'resume',
+        severity: 'medium',
+        title: 'Resume automation',
+        summary: 'Saved repair decisions are durable; background resume can continue the run.',
+        panel: 'review',
+        action: 'resume',
+      });
+    } else {
+      const reason = resumeDisabledReason(model);
+      queue.push({
+        id: 'resume-blocked',
+        severity: model.repoDirty && !model.allowDirty ? 'high' : 'medium',
+        title: 'Resume is blocked',
+        summary: reason ?? 'Resume is not available for this run state.',
+        panel: model.repoDirty && !model.allowDirty ? 'workspace' : 'review',
+      });
+    }
+  }
+  if (model.repoDirty && !model.allowDirty) {
+    queue.push({
+      id: 'workspace-dirty',
+      severity: 'high',
+      title: 'Resolve dirty workspace',
+      summary: 'Commit or stash local changes, or explicitly allow dirty resume for this TUI session.',
+      panel: 'workspace',
+    });
+  }
+  const environmentCount = items.filter((item) => decisionValue(model.pendingDecisions, item) === 'environment_required').length;
+  const manualCount = items.filter((item) => decisionValue(model.pendingDecisions, item) === 'manual_required').length;
+  if (environmentCount) {
+    queue.push({
+      id: 'environment-required',
+      severity: 'medium',
+      title: 'Environment action selected',
+      summary: `${countPhrase(environmentCount, 'item')} require local tools, services, credentials, or setup before automation can finish.`,
+      panel: 'review',
+    });
+  }
+  if (manualCount) {
+    queue.push({
+      id: 'manual-required',
+      severity: 'medium',
+      title: 'Manual action selected',
+      summary: `${countPhrase(manualCount, 'item')} require human work or verification outside automated repair.`,
+      panel: 'review',
+    });
+  }
+  if (!blocked && validation.failed > 0) {
+    queue.push({
+      id: 'validation-failed',
+      severity: 'high',
+      title: 'Validation failed',
+      summary: `${countPhrase(validation.failed, 'command')} failed; review classification will be available when the run blocks.`,
+      panel: 'timeline',
+    });
+  }
+  if (!blocked && reviews.failed > 0) {
+    queue.push({
+      id: 'review-failed',
+      severity: 'medium',
+      title: 'Review findings pending',
+      summary: `${countPhrase(reviews.failed, 'review track')} did not approve the integrated result.`,
+      panel: 'diagnostics',
+    });
+  }
+  return queue;
+}
+
+function durationText(ms) {
+  return ms === null || ms === undefined ? 'n/a' : formatRunDuration(ms);
+}
+
+function etaText(eta) {
+  if (!eta || eta.remainingMs === null || eta.remainingMs === undefined) {
+    return `ETA unknown${eta?.reason ? ` (${eta.reason})` : ''}`;
+  }
+  return `ETA ~${formatRunDuration(eta.remainingMs)} (${eta.confidence ?? 'low'})`;
+}
+
+function phaseProgressLine(phase, theme) {
+  const percent = Math.round((phase.fraction ?? 0) * 100);
+  const bar = progressBar(percent, 100, { width: 14, theme });
+  return `${phase.label.padEnd(14, ' ')} ${bar} ${String(percent).padStart(3, ' ')}%`;
+}
+
+function ageText(at, model) {
+  const started = timestampMs(at);
+  if (started === null) return 'age=n/a';
+  return `age=${formatRunDuration(Math.max(0, Date.now() - started))}`;
+}
+
+function activeEventItems(model) {
+  const active = new Map();
+  for (const event of model.events ?? []) {
+    if (event.type === 'codex.run.started') {
+      active.set(`agent:${event.label}`, {
+        kind: 'agent',
+        title: event.label ?? event.role ?? 'agent',
+        detail: `role=${event.role ?? 'unknown'}${event.workstreamId ? ` workstream=${event.workstreamId}` : ''}`,
+        at: event.at,
+      });
+    } else if (event.type === 'codex.run.completed' || event.type === 'codex.result.invalid') {
+      active.delete(`agent:${event.label}`);
+    } else if (event.type === 'validation.started') {
+      active.set(`validation:${event.command}`, {
+        kind: 'validation',
+        title: event.command,
+        detail: `${event.index ?? '?'}/${event.total ?? '?'}`,
+        at: event.at,
+      });
+    } else if (event.type === 'validation.completed' || event.type === 'validation.rejected') {
+      active.delete(`validation:${event.command}`);
+    } else if (event.type === 'validation.setup.started') {
+      active.set(`setup:${event.command}`, {
+        kind: 'setup',
+        title: event.command,
+        detail: `${event.index ?? '?'}/${event.total ?? '?'}`,
+        at: event.at,
+      });
+    } else if (event.type === 'validation.setup.completed' || event.type === 'validation.setup.skipped') {
+      active.delete(`setup:${event.command}`);
+    } else if (event.type === 'inspection.started') {
+      active.set(`inspection:${event.id ?? event.role}`, {
+        kind: 'inspection',
+        title: event.role ?? event.id ?? 'inspection',
+        detail: `phase=${event.inspectionPhase ?? event.phase ?? 'unknown'}`,
+        at: event.at,
+      });
+    } else if (event.type === 'inspection.completed') {
+      active.delete(`inspection:${event.id ?? event.role}`);
+    }
+  }
+  return [...active.values()];
+}
+
+function activeWorkLines(model, theme) {
+  const lines = [];
+  const running = (model.state?.workstreams ?? []).filter((item) => item.status === 'running');
+  for (const workstream of running) {
+    lines.push(`${theme.cyan('workstream')} ${workstream.id}: ${workstream.title} (${ageText(workstream.startedAt, model)})`);
+  }
+  for (const item of activeEventItems(model)) {
+    lines.push(`${theme.cyan(item.kind)} ${item.title} ${theme.dim(item.detail)} (${ageText(item.at, model)})`);
+  }
+  if (resumeRunning(model)) {
+    const pid = model.resumeState?.pid ? ` pid=${model.resumeState.pid}` : '';
+    lines.push(`${theme.cyan('resume')} background ${model.resumeState.status}${pid}`);
+  }
+  if (!lines.length) lines.push(theme.dim('No active work item is currently visible.'));
+  return lines.slice(0, 8);
+}
+
+function interventionLine(item, index, selected, theme) {
+  const marker = index === selected ? theme.cyan('>') : ' ';
+  return `${marker} ${severityBadge(item.severity ?? 'info', theme)} ${item.title} :: ${item.summary}`;
+}
+
+function timelineSnapshotLines(model) {
+  return eventEntries(model)
+    .slice(-5)
+    .map((entry) => entry.line);
+}
+
+function renderCockpit(model, theme) {
+  const state = model.state ?? {};
+  const telemetry = model.telemetry ?? computeRunTelemetry(state, model.events ?? [], model.background);
+  const selected = clamp(selectedIndex(model, 'cockpit'), 0, Math.max(0, (model.interventionItems ?? []).length - 1));
+  const nextAction = nextActionLines(model, validationSummary(state.validation?.runs ?? []), reviewSummary(state.reviews ?? []), theme);
+  const lines = [
+    theme.bold('Autopilot Cockpit'),
+    `Objective: ${state.objective ?? 'n/a'}`,
     ...nextAction,
     '',
-    theme.bold('Run'),
-    `Objective: ${state.objective ?? 'n/a'}`,
-    `Base: ${state.baseRef ?? 'n/a'} (${shortSha(state.baseCommit)})`,
-    `Integration: ${state.integration?.branch ?? 'n/a'} @ ${shortSha(state.integration?.commit)}`,
-    '',
     theme.bold('Progress'),
-    `Workstreams ${progressBar(integrated, workstreams.length, { theme })} integrated, ${active} active`,
-    `Validation  ${progressBar(validation.passed, validation.total, { failed: validation.failed, theme })} passed, ${validation.failed} failed`,
-    `Setup       ${setupRuns.length ? progressBar(setupRuns.filter((run) => run.ok).length, setupRuns.length, { failed: setupRuns.filter((run) => !run.ok).length, theme }) : progressBar(0, 0, { theme })}`,
-    `Reviews     ${progressBar(reviews.approved, reviews.total, { failed: reviews.failed, theme })} approved, ${reviews.failed} not approved`,
-    '',
-    theme.bold('Control Points'),
-    `Workstreams: ${integrated}/${workstreams.length} integrated, ${active} active`,
-    `Validation: ${theme.status(validation.failed === 0, `${validation.passed}/${validation.total} passed`)} (${validation.failed} failed)`,
-    `Setup: ${setupSummary}`,
-    `Review tracks: ${theme.status(reviews.failed === 0, `${reviews.approved}/${reviews.total} approved`)} (${reviews.failed} not approved)`,
-    `Review inbox: ${reviewPressureLine(model.inbox?.items ?? [], theme)}`,
-    `Review state: ${reviewPersistenceLine(model, theme)}`,
-    `Resume: ${reviewResumeLine(model, theme)}`,
-    `Workspace: ${workspaceStateLine(model, theme)}`,
-    `Human reviews: ${humanReviews}`,
-    '',
-    theme.bold('Current Result'),
-    final,
+    `Overall ${progressBar(telemetry.progress?.percent ?? 0, 100, { width: 28, theme })} ${telemetry.progress?.label ?? 'unknown'}`,
+    ...(telemetry.progress?.phases ?? []).map((phase) => phaseProgressLine(phase, theme)),
   ];
+  lines.push(
+    '',
+    theme.bold(`Intervention Queue (${model.interventionItems?.length ?? 0})`),
+  );
+  if (!(model.interventionItems ?? []).length) lines.push(theme.green('No operator action is required.'));
+  else {
+    lines.push(...model.interventionItems.map((item, index) => interventionLine(item, index, selected, theme)));
+    lines.push(theme.dim('Enter opens the selected item or starts its suggested action.'));
+  }
+  if (!model.noTime) {
+    lines.push(
+      '',
+      theme.bold('Time'),
+      `Elapsed: ${durationText(telemetry.timing?.elapsedMs)} | Phase: ${durationText(telemetry.timing?.phaseElapsedMs)} | ${etaText(telemetry.eta)}`,
+      `Last event: ${formatAge(telemetry.timing?.updatedAgoMs)} | Heartbeat: ${formatAge(telemetry.timing?.heartbeatAgoMs)}`,
+    );
+  }
+  lines.push(
+    '',
+    theme.bold('Active Work'),
+    ...activeWorkLines(model, theme),
+  );
+  const recent = timelineSnapshotLines(model);
+  lines.push('', theme.bold('Timeline Snapshot'), ...(recent.length ? recent : [theme.dim('No high-signal events yet.')]));
+  if (model.helpVisible) {
+    lines.push(
+      '',
+      theme.bold('Keys'),
+      '1 cockpit, 2 review, 3 timeline, 4 workspace, 5 diagnostics, Enter selected, y confirm, Esc/n cancel, ? help, q quit',
+    );
+  }
+  return lines;
 }
 
 function renderedEventLine(event, model, { verbose = false, rawFallback = false } = {}) {
@@ -719,7 +959,7 @@ function eventEntries(model) {
 
 function renderEvents(model, theme) {
   const entries = eventEntries(model);
-  const selected = clamp(selectedIndex(model, 'events'), 0, Math.max(0, entries.length - 1));
+  const selected = clamp(selectedIndex(model, 'timeline'), 0, Math.max(0, entries.length - 1));
   const total = model.events?.length ?? 0;
   const mode = normalizeViewMode(model.viewMode);
   const title = mode === 'extended' ? `Raw Events (${total})` : `Timeline (${entries.length}/${total})`;
@@ -736,7 +976,7 @@ function renderEvents(model, theme) {
   ];
 }
 
-function checkpointLines(model, theme) {
+function diagnosticsLines(model, theme) {
   const state = model.state ?? {};
   const paint = theme ?? {
     green: (value) => value,
@@ -788,11 +1028,11 @@ function checkpointLines(model, theme) {
   return lines;
 }
 
-function renderCheckpoints(model, theme) {
-  const lines = checkpointLines(model, theme);
-  const selected = clamp(selectedIndex(model, 'checkpoints'), 0, Math.max(0, lines.length - 1));
+function renderDiagnostics(model, theme) {
+  const lines = diagnosticsLines(model, theme);
+  const selected = clamp(selectedIndex(model, 'diagnostics'), 0, Math.max(0, lines.length - 1));
   return [
-    theme.bold(`Checkpoints (${lines.filter((line) => line !== '').length})`),
+    theme.bold(`Diagnostics (${lines.filter((line) => line !== '').length})`),
     theme.dim('Version and gate summary. Press v for recent checkpoint events.'),
     '',
     ...renderSelectableList(lines, selected, theme),
@@ -920,14 +1160,14 @@ function renderReview(model, theme) {
 }
 
 function bodyLines(model, theme) {
-  if (model.panel === 'events') return renderEvents(model, theme);
-  if (model.panel === 'checkpoints') return renderCheckpoints(model, theme);
+  if (model.panel === 'timeline') return renderEvents(model, theme);
+  if (model.panel === 'diagnostics') return renderDiagnostics(model, theme);
   if (model.panel === 'review') return renderReview(model, theme);
   if (model.panel === 'workspace') return renderWorkspace(model, theme);
-  return renderOverview(model, theme);
+  return renderCockpit(model, theme);
 }
 
-export function renderTuiScreen(model, { width = 100, height = 30 } = {}) {
+function renderTuiLines(model, { width = 100, height = 30 } = {}) {
   const safeWidth = Math.max(40, Number(width) || 100);
   const safeHeight = Math.max(12, Number(height) || 30);
   const theme = makeTheme(model.noColor);
@@ -938,7 +1178,22 @@ export function renderTuiScreen(model, { width = 100, height = 30 } = {}) {
     ...lineBlock(header, { width: safeWidth, height: header.length }),
     ...lineBlock(bodyLines(model, theme), { width: safeWidth, height: availableBody }),
     ...lineBlock(footer, { width: safeWidth, height: footer.length }),
-  ].join('\n');
+  ];
+}
+
+function TuiFrame({ model, width = 100, height = 30 }) {
+  const lines = renderTuiLines(model, { width, height });
+  return h(
+    Box,
+    { flexDirection: 'column', width },
+    lines.map((line, index) => h(Text, { key: `line-${index}` }, line === '' ? ' ' : line)),
+  );
+}
+
+export function renderTuiScreen(model, { width = 100, height = 30 } = {}) {
+  const safeWidth = Math.max(40, Number(width) || 100);
+  const safeHeight = Math.max(12, Number(height) || 30);
+  return renderToString(h(TuiFrame, { model, width: safeWidth, height: safeHeight }), { columns: safeWidth });
 }
 
 function normalizedKey(input) {
@@ -986,33 +1241,100 @@ function applyNoteKey(model, key) {
   return { model, action: null };
 }
 
+function requestSaveConfirmation(model) {
+  if (!(model.inbox?.items ?? []).length) return { model: { ...model, message: 'No review items to save.' }, action: null };
+  if (!['blocked', 'failed'].includes(model.state?.phase)) {
+    return { model: { ...model, message: 'Review decisions can be saved only for blocked or failed runs.' }, action: null };
+  }
+  return {
+    model: {
+      ...model,
+      panel: model.panel === 'cockpit' ? 'cockpit' : 'review',
+      confirmAction: {
+        type: 'save',
+        prompt: `Save ${countPhrase(model.inbox.items.length, 'review decision')} for run ${model.runId ?? '<run-id>'}?`,
+      },
+      message: 'Confirm save with y.',
+    },
+    action: null,
+  };
+}
+
+function requestResumeConfirmation(model) {
+  const disabled = resumeDisabledReason(model);
+  if (disabled) return { model: { ...model, message: disabled }, action: null };
+  return {
+    model: {
+      ...model,
+      confirmAction: {
+        type: 'resume',
+        prompt: `Start background resume for run ${model.runId ?? '<run-id>'}?`,
+      },
+      message: 'Confirm background resume with y.',
+    },
+    action: null,
+  };
+}
+
+function activateCockpitItem(model) {
+  const item = (model.interventionItems ?? [])[selectedIndex(model, 'cockpit')];
+  if (!item) return { model: { ...model, message: 'No operator action is required right now.' }, action: null };
+  if (item.action === 'save') return requestSaveConfirmation(model);
+  if (item.action === 'resume') return requestResumeConfirmation(model);
+  const panel = normalizePanel(item.panel);
+  return { model: { ...model, panel, message: `${PANEL_LABELS[panel]} panel.` }, action: null };
+}
+
+function applyConfirmKey(model, key) {
+  if (key === 'q' || key === 'ctrl-c') return { model: { ...model, message: 'Closing TUI.' }, action: 'quit' };
+  if (key === 'y' && model.confirmAction?.type) {
+    const action = model.confirmAction.type;
+    return {
+      model: {
+        ...model,
+        confirmAction: null,
+        resumeState: action === 'resume' ? { status: 'starting' } : model.resumeState,
+        message: action === 'save' ? 'Saving review decisions...' : 'Starting background resume...',
+      },
+      action,
+    };
+  }
+  if (key === 'n' || key === 'escape') {
+    return { model: { ...model, confirmAction: null, message: 'Action cancelled.' }, action: null };
+  }
+  return { model: { ...model, message: 'Confirm with y, or cancel with Esc/n.' }, action: null };
+}
+
 export function applyTuiKey(model, keyInput) {
   const key = normalizedKey(keyInput);
   if (model.noteEditing) return applyNoteKey(model, key);
+  if (model.confirmAction) return applyConfirmKey(model, key);
   if (key === 'q' || key === 'ctrl-c') return { model: { ...model, message: 'Closing TUI.' }, action: 'quit' };
+  if (key === '?') return { model: { ...model, helpVisible: !model.helpVisible, message: model.helpVisible ? 'Help hidden.' : 'Help shown.' }, action: null };
   if (key === 'R') {
-    const disabled = resumeDisabledReason(model);
-    if (disabled) return { model: { ...model, message: disabled }, action: null };
-    return { model: { ...model, message: 'Starting background resume...', resumeState: { status: 'starting' } }, action: 'resume' };
+    return requestResumeConfirmation(model);
+  }
+  if (key === 's') {
+    return requestSaveConfirmation(model);
   }
   if (key === '!') {
     if (!model.repoDirty) return { model: { ...model, message: 'Working tree is clean; allow-dirty is not needed.' }, action: null };
     const allowDirty = !model.allowDirty;
     return {
-      model: {
+      model: withDerivedTuiFields({
         ...model,
         allowDirty,
         panel: 'workspace',
         message: allowDirty
           ? 'Dirty resume allowed for this TUI session. Press R to resume if review decisions are saved.'
           : 'Dirty resume disabled. Commit/stash changes or press ! to allow it again.',
-      },
+      }),
       action: null,
     };
   }
   if (key === 'v') {
     const viewMode = nextViewMode(model.viewMode);
-    return { model: { ...model, viewMode, selected: { ...model.selected, events: 0 }, message: `View mode: ${viewMode}.` }, action: null };
+    return { model: { ...model, viewMode, selected: { ...model.selected, timeline: 0 }, message: `View mode: ${VIEW_LABELS[viewMode] ?? viewMode}.` }, action: null };
   }
   if (/^[1-5]$/.test(key)) {
     const panel = TUI_PANELS[Number(key) - 1];
@@ -1024,13 +1346,11 @@ export function applyTuiKey(model, keyInput) {
   if (key === 'k' || key === 'up') {
     return { model: setSelection(model, model.panel, selectedIndex(model) - 1), action: null };
   }
+  if (model.panel === 'cockpit' && key === 'enter') {
+    return activateCockpitItem(model);
+  }
   if (model.panel === 'review') {
     const item = currentReviewItem(model);
-    if (key === 's') {
-      if (!(model.inbox?.items ?? []).length) return { model: { ...model, message: 'No review items to save.' }, action: null };
-      if (!['blocked', 'failed'].includes(model.state?.phase)) return { model: { ...model, message: 'Review decisions can be saved only for blocked or failed runs.' }, action: null };
-      return { model: { ...model, message: 'Saving review decisions...' }, action: 'save' };
-    }
     if (key === 'A') {
       const pendingDecisions = { ...model.pendingDecisions };
       for (const reviewItem of model.inbox?.items ?? []) pendingDecisions[reviewItem.id] = 'repair_requested';
@@ -1074,16 +1394,155 @@ export function reviewDecisionCounts(model) {
   return countBy((model.inbox?.items ?? []).map((item) => decisionValue(model.pendingDecisions, item)));
 }
 
-function frameText(outputStream, model) {
-  const width = outputStream.columns || 100;
-  const height = outputStream.rows || 30;
-  return `\u001b[H\u001b[2J${renderTuiScreen(model, { width, height })}`;
-}
-
 function assertInteractiveTty(inputStream, outputStream) {
   if (!inputStream?.isTTY || !outputStream?.isTTY) {
     throw new Error('TUI mode requires an interactive terminal. Use status, status --json, review, or review --json in non-TTY contexts.');
   }
+}
+
+function keyInputFromInk(input, key = {}) {
+  if (key.ctrl && input === 'c') return '\u0003';
+  if (key.return) return '\r';
+  if (key.escape) return '\u001b';
+  if (key.backspace || key.delete) return '\u007f';
+  if (key.upArrow) return '\u001b[A';
+  if (key.downArrow) return '\u001b[B';
+  return input ?? '';
+}
+
+function splitPrintableKeyInput(keyInput) {
+  if (typeof keyInput !== 'string' || keyInput.length <= 1 || keyInput.startsWith('\u001b')) return [keyInput];
+  return [...keyInput];
+}
+
+function ensureInkInputStream(inputStream) {
+  if (inputStream && typeof inputStream.ref !== 'function') inputStream.ref = () => inputStream;
+  if (inputStream && typeof inputStream.unref !== 'function') inputStream.unref = () => inputStream;
+  return inputStream;
+}
+
+function InkTuiApp({
+  initialModel,
+  load,
+  saveReview,
+  resumeRun,
+  initialPanel,
+  viewMode,
+  noColor,
+  noTime,
+  refreshMs,
+  onModelChange,
+}) {
+  const { exit } = useApp();
+  const { columns = 100, rows = 30 } = useWindowSize();
+  const [model, setModel] = useState(initialModel);
+  const modelRef = useRef(initialModel);
+  const savingRef = useRef(false);
+  const resumingRef = useRef(false);
+  const reloadInFlightRef = useRef(false);
+  const closedRef = useRef(false);
+
+  const commitModel = (next) => {
+    modelRef.current = next;
+    onModelChange?.(next);
+    setModel(next);
+  };
+
+  const close = (next = modelRef.current) => {
+    if (closedRef.current) return;
+    closedRef.current = true;
+    commitModel(next);
+    exit();
+  };
+
+  const performAction = async (action, actionModel) => {
+    if (action === 'save') {
+      if (!saveReview) {
+        commitModel({ ...actionModel, message: 'This TUI session cannot save review decisions.' });
+        return;
+      }
+      savingRef.current = true;
+      try {
+        const saved = await saveReview(actionModel);
+        commitModel(markReviewSaved(modelRef.current, saved));
+      } catch (error) {
+        commitModel({ ...modelRef.current, message: `Save failed: ${error?.message ?? String(error)}` });
+      } finally {
+        savingRef.current = false;
+      }
+      return;
+    }
+
+    if (action === 'resume') {
+      if (!resumeRun) {
+        commitModel({ ...actionModel, resumeState: { status: 'idle' }, message: 'This TUI session cannot resume delivery.' });
+        return;
+      }
+      resumingRef.current = true;
+      try {
+        const started = await resumeRun(actionModel);
+        commitModel(withDerivedTuiFields({
+          ...modelRef.current,
+          resumeState: {
+            status: started?.status ?? 'running',
+            pid: started?.pid ?? null,
+            logPath: started?.backgroundLogPath ?? started?.logPath ?? null,
+            startedAt: new Date().toISOString(),
+            message: 'Background resume started.',
+          },
+          message: `Resume started${started?.pid ? ` pid=${started.pid}` : ''}.`,
+        }));
+      } catch (error) {
+        commitModel(withDerivedTuiFields({
+          ...modelRef.current,
+          resumeState: { status: 'failed', error: error?.message ?? String(error) },
+          message: `Resume failed: ${error?.message ?? String(error)}`,
+        }));
+      } finally {
+        resumingRef.current = false;
+      }
+    }
+  };
+
+  useInput((input, key) => {
+    void (async () => {
+      for (const keyInput of splitPrintableKeyInput(keyInputFromInk(input, key))) {
+        if (savingRef.current || resumingRef.current) {
+          commitModel({ ...modelRef.current, message: savingRef.current ? 'Save is already in progress.' : 'Resume is already starting.' });
+          continue;
+        }
+        const result = applyTuiKey(modelRef.current, keyInput);
+        commitModel(result.model);
+        if (result.action === 'quit') {
+          close(result.model);
+          return;
+        }
+        if (result.action) await performAction(result.action, result.model);
+      }
+    })();
+  });
+
+  useEffect(() => {
+    const timer = setInterval(async () => {
+      if (closedRef.current || reloadInFlightRef.current || savingRef.current || resumingRef.current || modelRef.current.noteEditing) return;
+      reloadInFlightRef.current = true;
+      try {
+        const next = createTuiModel({ ...await load(), initialPanel, viewMode, noColor, noTime });
+        commitModel(mergeModel(modelRef.current, next));
+      } catch (error) {
+        commitModel({ ...modelRef.current, message: `Refresh failed: ${error?.message ?? String(error)}` });
+      } finally {
+        reloadInFlightRef.current = false;
+      }
+    }, Math.max(250, Number(refreshMs) || 1000));
+    return () => clearInterval(timer);
+  }, []);
+
+  return h(TuiFrame, {
+    model,
+    width: Math.max(40, Number(columns) || 100),
+    height: Math.max(12, Number(rows) || 30),
+  });
 }
 
 export async function runTerminalTui({
@@ -1092,133 +1551,49 @@ export async function runTerminalTui({
   load,
   saveReview = null,
   resumeRun = null,
-  initialPanel = 'overview',
+  initialPanel = 'cockpit',
   viewMode = 'simple',
   noColor = false,
+  noTime = false,
   refreshMs = 1000,
   once = false,
 } = {}) {
   if (typeof load !== 'function') throw new Error('TUI load callback is required.');
   if (!once) assertInteractiveTty(inputStream, outputStream);
 
-  let model = createTuiModel({ ...await load(), initialPanel, viewMode, noColor });
+  let model = createTuiModel({ ...await load(), initialPanel, viewMode, noColor, noTime });
   if (once) {
     outputStream.write(renderTuiScreen(model, { width: outputStream.columns || 100, height: outputStream.rows || 30 }));
     return model;
   }
 
-  outputStream.write('\u001b[?1049h\u001b[?25l');
-  const previousRawMode = inputStream.isRaw ?? false;
-  if (typeof inputStream.setRawMode === 'function') inputStream.setRawMode(true);
-  inputStream.resume?.();
-  readline.emitKeypressEvents(inputStream);
+  const instance = renderInk(
+    h(InkTuiApp, {
+      initialModel: model,
+      load,
+      saveReview,
+      resumeRun,
+      initialPanel,
+      viewMode,
+      noColor,
+      noTime,
+      refreshMs,
+      onModelChange: (next) => {
+        model = next;
+      },
+    }),
+    {
+      stdin: ensureInkInputStream(inputStream),
+      stdout: outputStream,
+      stderr: outputStream,
+      exitOnCtrlC: false,
+      patchConsole: false,
+      interactive: true,
+      alternateScreen: true,
+      maxFps: 60,
+    },
+  );
 
-  let closed = false;
-  let saving = false;
-  let resuming = false;
-  let reloadInFlight = false;
-  let lastFrame = null;
-  let resolveDone;
-  const done = new Promise((resolve) => {
-    resolveDone = resolve;
-  });
-
-  const close = () => {
-    if (closed) return;
-    closed = true;
-    resolveDone();
-  };
-
-  const redraw = (force = false) => {
-    const frame = frameText(outputStream, model);
-    if (force || frame !== lastFrame) {
-      outputStream.write(frame);
-      lastFrame = frame;
-    }
-  };
-  const onKey = async (str, key) => {
-    if (saving || resuming) {
-      model = { ...model, message: saving ? 'Save is already in progress.' : 'Resume is already starting.' };
-      redraw();
-      return;
-    }
-    const result = applyTuiKey(model, str && str.length ? str : key);
-    model = result.model;
-    if (result.action === 'save') {
-      if (!saveReview) {
-        model = { ...model, message: 'This TUI session cannot save review decisions.' };
-      } else if (!saving) {
-        saving = true;
-        redraw();
-        try {
-          const saved = await saveReview(model);
-          model = markReviewSaved(model, saved);
-        } catch (error) {
-          model = { ...model, message: `Save failed: ${error?.message ?? String(error)}` };
-        } finally {
-          saving = false;
-        }
-      }
-    } else if (result.action === 'resume') {
-      if (!resumeRun) {
-        model = { ...model, message: 'This TUI session cannot resume delivery.' };
-      } else {
-        resuming = true;
-        redraw();
-        try {
-          const started = await resumeRun(model);
-          model = {
-            ...model,
-            resumeState: {
-              status: started?.status ?? 'running',
-              pid: started?.pid ?? null,
-              logPath: started?.backgroundLogPath ?? started?.logPath ?? null,
-              startedAt: new Date().toISOString(),
-              message: 'Background resume started.',
-            },
-            message: `Resume started${started?.pid ? ` pid=${started.pid}` : ''}.`,
-          };
-        } catch (error) {
-          model = {
-            ...model,
-            resumeState: { status: 'failed', error: error?.message ?? String(error) },
-            message: `Resume failed: ${error?.message ?? String(error)}`,
-          };
-        } finally {
-          resuming = false;
-        }
-      }
-    }
-    redraw();
-    if (result.action === 'quit') close();
-  };
-
-  const refresh = async () => {
-    if (closed || reloadInFlight || saving || resuming || model.noteEditing) return;
-    reloadInFlight = true;
-    try {
-      const next = createTuiModel({ ...await load(), initialPanel, viewMode, noColor });
-      model = mergeModel(model, next);
-      redraw();
-    } catch (error) {
-      model = { ...model, message: `Refresh failed: ${error?.message ?? String(error)}` };
-      redraw();
-    } finally {
-      reloadInFlight = false;
-    }
-  };
-
-  inputStream.on('keypress', onKey);
-  redraw(true);
-  const timer = setInterval(refresh, Math.max(250, Number(refreshMs) || 1000));
-
-  try {
-    while (!closed) await Promise.race([done, delay(250)]);
-    return model;
-  } finally {
-    clearInterval(timer);
-    inputStream.off?.('keypress', onKey);
-    if (typeof inputStream.setRawMode === 'function') inputStream.setRawMode(previousRawMode);
-    outputStream.write('\u001b[?25h\u001b[?1049l');
-  }
+  await instance.waitUntilExit();
+  return model;
 }
