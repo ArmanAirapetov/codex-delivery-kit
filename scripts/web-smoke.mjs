@@ -73,6 +73,53 @@ try {
   await saveState(repo, state);
   await appendEvent(repo, state, { type: 'workflow.blocked', summary: 'Validation failed.' });
 
+  const acceptedRunId = 'web-smoke-accepted';
+  const acceptedState = createInitialState({
+    runId: acceptedRunId,
+    objective: 'Accepted Web smoke delivery',
+    repoRoot: repo,
+    baseRef: 'main',
+    baseCommit,
+    maxRepairs: 2,
+  });
+  acceptedState.startedAt = '2000-01-01T00:00:00.000Z';
+  acceptedState.phase = 'accepted';
+  acceptedState.finishedAt = now();
+  acceptedState.integration = {
+    branch: 'codex-delivery-integration/web-smoke-accepted/integration',
+    worktreePath: repo,
+    commit: baseCommit,
+    attempts: [],
+  };
+  acceptedState.validation = {
+    commands: ['node scripts/check.mjs'],
+    runs: [{ command: 'node scripts/check.mjs', ok: true, exitCode: 0, durationMs: 24, logPath: `.codex/delivery-runs/${acceptedRunId}/commands/validation-01.log` }],
+  };
+  acceptedState.verification = { verdict: 'passed', criteria: [] };
+  acceptedState.reviews = [{ role: 'reviewer', verdict: 'approved', summary: 'Approved.' }];
+  acceptedState.final = {
+    status: 'accepted',
+    summary: 'Validation passed.',
+    runId: acceptedRunId,
+    integrationBranch: acceptedState.integration.branch,
+    integrationCommit: baseCommit,
+    integrationWorktree: repo,
+    gate: { passed: true, failedCommands: [], failedCriteria: [], blockingFindings: [], reviewFailures: [] },
+    finishedAt: now(),
+  };
+  await mkdir(path.join(repo, '.codex', 'delivery-runs', acceptedRunId, 'commands'), { recursive: true });
+  await writeFile(path.join(repo, '.codex', 'delivery-runs', acceptedRunId, 'commands', 'validation-01.log'), 'ok\n', 'utf8');
+  await saveState(repo, acceptedState);
+  await appendEvent(repo, acceptedState, { type: 'workflow.accepted', summary: 'Validation passed.' });
+
+  await mkdir(path.join(repo, '.codex', 'escaped-run'), { recursive: true });
+  await writeFile(path.join(repo, '.codex', 'escaped-run', 'state.json'), `${JSON.stringify({
+    ...acceptedState,
+    runId: 'escaped-run',
+    objective: 'Escaped run must not be reachable through encoded route traversal',
+  }, null, 2)}\n`, 'utf8');
+  await writeFile(path.join(repo, '.codex', 'escaped-run', 'events.jsonl'), '', 'utf8');
+
   const created = await createWebServer({ repo, token: 'web-smoke-token' });
   server = created.server;
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -94,6 +141,28 @@ try {
   assert.equal(run.payload.runId, runId);
   assert.equal(run.payload.inbox.items.length, 1);
   assert.equal(typeof run.payload.telemetry.progress.percent, 'number');
+
+  const encodedTraversal = await fetchJson(base, `/api/runs/${encodeURIComponent('../escaped-run')}`);
+  assert.equal(encodedTraversal.response.status, 400);
+  assert.match(encodedTraversal.payload.error, /Invalid run id/);
+
+  const malformedRunId = await fetchJson(base, '/api/runs/%E0%A4%A');
+  assert.equal(malformedRunId.response.status, 400);
+  assert.match(malformedRunId.payload.error, /Invalid run id/);
+
+  const invalidReview = await fetchJson(base, `/api/runs/${runId}/review`, {
+    method: 'POST',
+    body: JSON.stringify({ decisions: [{ itemId: run.payload.inbox.items[0].id, decision: 'bogus' }] }),
+  });
+  assert.equal(invalidReview.response.status, 400);
+  assert.match(invalidReview.payload.error, /Invalid decision/);
+
+  const acceptedReview = await fetchJson(base, `/api/runs/${acceptedRunId}/review`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
+  assert.equal(acceptedReview.response.status, 400);
+  assert.match(acceptedReview.payload.error, /blocked or failed/);
 
   const review = await fetchJson(base, `/api/runs/${runId}/review`, {
     method: 'POST',

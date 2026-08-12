@@ -70,9 +70,16 @@ function sendJson(res, statusCode, payload) {
   res.end(body);
 }
 
+function errorStatusCode(error) {
+  const explicit = Number(error?.statusCode ?? error?.status);
+  if (Number.isFinite(explicit) && explicit >= 400 && explicit < 600) return explicit;
+  if (error?.name === 'UserFacingError') return 400;
+  return 500;
+}
+
 function sendError(res, error) {
-  const statusCode = Number(error?.statusCode ?? error?.status ?? 500);
-  sendJson(res, statusCode >= 400 && statusCode < 600 ? statusCode : 500, {
+  const statusCode = errorStatusCode(error);
+  sendJson(res, statusCode, {
     error: statusCode >= 500 ? 'Internal server error' : error?.message ?? 'Request failed',
     detail: statusCode >= 500 ? error?.message ?? String(error) : undefined,
   });
@@ -100,11 +107,32 @@ async function readJsonBody(req) {
   }
 }
 
+function badRequest(message) {
+  const error = new Error(message);
+  error.statusCode = 400;
+  return error;
+}
+
+function decodePathSegment(value, label) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    throw badRequest(`Invalid ${label}.`);
+  }
+}
+
+function assertSafeRunId(runId) {
+  if (!runId || runId === '.' || runId === '..' || runId.includes('/') || runId.includes('\\') || path.basename(runId) !== runId) {
+    throw badRequest('Invalid run id.');
+  }
+  return runId;
+}
+
 function routeRun(pathname) {
   const match = pathname.match(/^\/api\/runs\/([^/]+)(?:\/([^/]+))?$/);
   if (!match) return null;
   return {
-    runId: decodeURIComponent(match[1]),
+    runId: assertSafeRunId(decodePathSegment(match[1], 'run id')),
     action: match[2] ?? null,
   };
 }
